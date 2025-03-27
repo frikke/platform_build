@@ -15,14 +15,13 @@
 #
 
 import copy
-import json
 import os
 import subprocess
 import tempfile
-import time
 import unittest
 import zipfile
 from hashlib import sha1
+from typing import BinaryIO
 
 import common
 import test_utils
@@ -36,17 +35,43 @@ MiB = 1024 * KiB
 GiB = 1024 * MiB
 
 
-def get_2gb_string():
+def get_2gb_file():
   size = int(2 * GiB + 1)
   block_size = 4 * KiB
   step_size = 4 * MiB
-  # Generate a long string with holes, e.g. 'xyz\x00abc\x00...'.
+  tmpfile = tempfile.NamedTemporaryFile()
+  tmpfile.truncate(size)
   for _ in range(0, size, step_size):
-    yield os.urandom(block_size)
-    yield b'\0' * (step_size - block_size)
+    tmpfile.write(os.urandom(block_size))
+    tmpfile.seek(step_size - block_size, os.SEEK_CUR)
+  return tmpfile
+
+
+def hash_file(filename):
+  sha1_hash = sha1()
+  with open(filename, "rb") as fp:
+    for data in iter(lambda: fp.read(4*MiB), b''):
+      sha1_hash.update(data)
+  return sha1_hash
 
 
 class BuildInfoTest(test_utils.ReleaseToolsTestCase):
+
+  TEST_INFO_FINGERPRINT_DICT = {
+      'build.prop': common.PartitionBuildProps.FromDictionary(
+          'system', {
+              'ro.product.brand': 'product-brand',
+              'ro.product.name': 'product-name',
+              'ro.product.device': 'product-device',
+              'ro.build.version.release': 'version-release',
+              'ro.build.id': 'build-id',
+              'ro.build.version.incremental': 'version-incremental',
+              'ro.build.type': 'build-type',
+              'ro.build.tags': 'build-tags',
+              'ro.build.version.sdk': 30,
+          }
+      ),
+  }
 
   TEST_INFO_DICT = {
       'build.prop': common.PartitionBuildProps.FromDictionary(
@@ -202,6 +227,33 @@ class BuildInfoTest(test_utils.ReleaseToolsTestCase):
         'ro.build.fingerprint'] = 'bad\x80fingerprint'
     self.assertRaises(ValueError, common.BuildInfo, info_dict, None)
 
+  def test_init_goodFingerprint(self):
+    info_dict = copy.deepcopy(self.TEST_INFO_FINGERPRINT_DICT)
+    build_info = common.BuildInfo(info_dict)
+    self.assertEqual(
+        'product-brand/product-name/product-device:version-release/build-id/'
+        'version-incremental:build-type/build-tags', build_info.fingerprint)
+
+    build_props = info_dict['build.prop'].build_props
+    del build_props['ro.build.id']
+    build_props['ro.build.legacy.id'] = 'legacy-build-id'
+    build_info = common.BuildInfo(info_dict, use_legacy_id=True)
+    self.assertEqual(
+        'product-brand/product-name/product-device:version-release/'
+        'legacy-build-id/version-incremental:build-type/build-tags',
+        build_info.fingerprint)
+
+    self.assertRaises(common.ExternalError, common.BuildInfo, info_dict, None,
+                      False)
+
+    info_dict['avb_enable'] = 'true'
+    info_dict['vbmeta_digest'] = 'abcde12345'
+    build_info = common.BuildInfo(info_dict, use_legacy_id=False)
+    self.assertEqual(
+        'product-brand/product-name/product-device:version-release/'
+        'legacy-build-id.abcde123/version-incremental:build-type/build-tags',
+        build_info.fingerprint)
+
   def test___getitem__(self):
     target_info = common.BuildInfo(self.TEST_INFO_DICT, None)
     self.assertEqual('value1', target_info['property1'])
@@ -333,7 +385,7 @@ class BuildInfoTest(test_utils.ReleaseToolsTestCase):
     info_dict['build.prop'].build_props[
         'ro.product.property_source_order'] = 'bad-source'
     with self.assertRaisesRegexp(common.ExternalError,
-        'Invalid ro.product.property_source_order'):
+                                 'Invalid ro.product.property_source_order'):
       info = common.BuildInfo(info_dict, None)
       info.GetBuildProp('ro.product.device')
 
@@ -386,6 +438,13 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     self.assertIsNone(zip_file.testzip())
 
   def _test_ZipWrite(self, contents, extra_zipwrite_args=None):
+    with tempfile.NamedTemporaryFile() as test_file:
+      test_file_name = test_file.name
+      for data in contents:
+        test_file.write(bytes(data))
+      return self._test_ZipWriteFile(test_file_name, extra_zipwrite_args)
+
+  def _test_ZipWriteFile(self, test_file_name, extra_zipwrite_args=None):
     extra_zipwrite_args = dict(extra_zipwrite_args or {})
 
     test_file = tempfile.NamedTemporaryFile(delete=False)
@@ -398,23 +457,20 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     arcname = extra_zipwrite_args.get("arcname", test_file_name)
     if arcname[0] == "/":
       arcname = arcname[1:]
+    sha1_hash = hash_file(test_file_name)
 
     zip_file.close()
     zip_file = zipfile.ZipFile(zip_file_name, "w", allowZip64=True)
 
     try:
-      sha1_hash = sha1()
-      for data in contents:
-        sha1_hash.update(bytes(data))
-        test_file.write(bytes(data))
-      test_file.close()
-
-      expected_stat = os.stat(test_file_name)
       expected_mode = extra_zipwrite_args.get("perms", 0o644)
       expected_compress_type = extra_zipwrite_args.get("compress_type",
                                                        zipfile.ZIP_STORED)
-      time.sleep(5)  # Make sure the atime/mtime will change measurably.
 
+      # Arbitrary timestamp, just to make sure common.ZipWrite() restores
+      # the timestamp after writing.
+      os.utime(test_file_name, (1234567, 1234567))
+      expected_stat = os.stat(test_file_name)
       common.ZipWrite(zip_file, test_file_name, **extra_zipwrite_args)
       common.ZipClose(zip_file)
 
@@ -422,7 +478,6 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
                    test_file_name, expected_stat, expected_mode,
                    expected_compress_type)
     finally:
-      os.remove(test_file_name)
       os.remove(zip_file_name)
 
   def _test_ZipWriteStr(self, zinfo_or_arcname, contents, extra_args=None):
@@ -437,8 +492,6 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     try:
       expected_compress_type = extra_args.get("compress_type",
                                               zipfile.ZIP_STORED)
-      time.sleep(5)  # Make sure the atime/mtime will change measurably.
-
       if not isinstance(zinfo_or_arcname, zipfile.ZipInfo):
         arcname = zinfo_or_arcname
         expected_mode = extra_args.get("perms", 0o644)
@@ -459,14 +512,13 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     finally:
       os.remove(zip_file_name)
 
-  def _test_ZipWriteStr_large_file(self, large, small, extra_args=None):
+  def _test_ZipWriteStr_large_file(self, large_file: BinaryIO, small, extra_args=None):
     extra_args = dict(extra_args or {})
 
     zip_file = tempfile.NamedTemporaryFile(delete=False)
     zip_file_name = zip_file.name
 
-    test_file = tempfile.NamedTemporaryFile(delete=False)
-    test_file_name = test_file.name
+    test_file_name = large_file.name
 
     arcname_large = test_file_name
     arcname_small = "bar"
@@ -479,17 +531,15 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     zip_file = zipfile.ZipFile(zip_file_name, "w", allowZip64=True)
 
     try:
-      sha1_hash = sha1()
-      for data in large:
-        sha1_hash.update(data)
-        test_file.write(data)
-      test_file.close()
+      sha1_hash = hash_file(test_file_name)
 
+      # Arbitrary timestamp, just to make sure common.ZipWrite() restores
+      # the timestamp after writing.
+      os.utime(test_file_name, (1234567, 1234567))
       expected_stat = os.stat(test_file_name)
       expected_mode = 0o644
       expected_compress_type = extra_args.get("compress_type",
                                               zipfile.ZIP_STORED)
-      time.sleep(5)  # Make sure the atime/mtime will change measurably.
 
       common.ZipWrite(zip_file, test_file_name, **extra_args)
       common.ZipWriteStr(zip_file, arcname_small, small, **extra_args)
@@ -506,7 +556,6 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
                    expected_compress_type=expected_compress_type)
     finally:
       os.remove(zip_file_name)
-      os.remove(test_file_name)
 
   def _test_reset_ZIP64_LIMIT(self, func, *args):
     default_limit = (1 << 31) - 1
@@ -532,10 +581,10 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     })
 
   def test_ZipWrite_large_file(self):
-    file_contents = get_2gb_string()
-    self._test_ZipWrite(file_contents, {
-        "compress_type": zipfile.ZIP_DEFLATED,
-    })
+    with get_2gb_file() as tmpfile:
+      self._test_ZipWriteFile(tmpfile.name, {
+          "compress_type": zipfile.ZIP_DEFLATED,
+      })
 
   def test_ZipWrite_resets_ZIP64_LIMIT(self):
     self._test_reset_ZIP64_LIMIT(self._test_ZipWrite, "")
@@ -582,11 +631,11 @@ class CommonZipTest(test_utils.ReleaseToolsTestCase):
     # zipfile.writestr() doesn't work when the str size is over 2GiB even with
     # the workaround. We will only test the case of writing a string into a
     # large archive.
-    long_string = get_2gb_string()
     short_string = os.urandom(1024)
-    self._test_ZipWriteStr_large_file(long_string, short_string, {
-        "compress_type": zipfile.ZIP_DEFLATED,
-    })
+    with get_2gb_file() as large_file:
+      self._test_ZipWriteStr_large_file(large_file, short_string, {
+          "compress_type": zipfile.ZIP_DEFLATED,
+      })
 
   def test_ZipWriteStr_resets_ZIP64_LIMIT(self):
     self._test_reset_ZIP64_LIMIT(self._test_ZipWriteStr, 'foo', b'')
@@ -776,9 +825,9 @@ class CommonApkUtilsTest(test_utils.ReleaseToolsTestCase):
   )
 
   APKCERTS_CERTMAP1 = {
-      'RecoveryLocalizer.apk' : 'certs/devkey',
-      'Settings.apk' : 'build/make/target/product/security/platform',
-      'TV.apk' : 'PRESIGNED',
+      'RecoveryLocalizer.apk': 'certs/devkey',
+      'Settings.apk': 'build/make/target/product/security/platform',
+      'TV.apk': 'PRESIGNED',
   }
 
   APKCERTS_TXT2 = (
@@ -793,10 +842,10 @@ class CommonApkUtilsTest(test_utils.ReleaseToolsTestCase):
   )
 
   APKCERTS_CERTMAP2 = {
-      'Compressed1.apk' : 'certs/compressed1',
-      'Compressed2a.apk' : 'certs/compressed2',
-      'Compressed2b.apk' : 'certs/compressed2',
-      'Compressed3.apk' : 'certs/compressed3',
+      'Compressed1.apk': 'certs/compressed1',
+      'Compressed2a.apk': 'certs/compressed2',
+      'Compressed2b.apk': 'certs/compressed2',
+      'Compressed3.apk': 'certs/compressed3',
   }
 
   APKCERTS_TXT3 = (
@@ -805,7 +854,7 @@ class CommonApkUtilsTest(test_utils.ReleaseToolsTestCase):
   )
 
   APKCERTS_CERTMAP3 = {
-      'Compressed4.apk' : 'certs/compressed4',
+      'Compressed4.apk': 'certs/compressed4',
   }
 
   # Test parsing with no optional fields, both optional fields, and only the
@@ -822,9 +871,9 @@ class CommonApkUtilsTest(test_utils.ReleaseToolsTestCase):
   )
 
   APKCERTS_CERTMAP4 = {
-      'RecoveryLocalizer.apk' : 'certs/devkey',
-      'Settings.apk' : 'build/make/target/product/security/platform',
-      'TV.apk' : 'PRESIGNED',
+      'RecoveryLocalizer.apk': 'certs/devkey',
+      'Settings.apk': 'build/make/target/product/security/platform',
+      'TV.apk': 'PRESIGNED',
   }
 
   def setUp(self):
@@ -928,7 +977,7 @@ class CommonApkUtilsTest(test_utils.ReleaseToolsTestCase):
     extracted_from_privkey = common.ExtractAvbPublicKey('avbtool', privkey)
     extracted_from_pubkey = common.ExtractAvbPublicKey('avbtool', pubkey)
     with open(extracted_from_privkey, 'rb') as privkey_fp, \
-        open(extracted_from_pubkey, 'rb') as pubkey_fp:
+            open(extracted_from_pubkey, 'rb') as pubkey_fp:
       self.assertEqual(privkey_fp.read(), pubkey_fp.read())
 
   def test_ParseCertificate(self):
@@ -1192,7 +1241,8 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     self.assertEqual(
         '1-5 9-10',
         sparse_image.file_map['//system/file1'].extra['text_str'])
-    self.assertTrue(sparse_image.file_map['//system/file2'].extra['incomplete'])
+    self.assertTrue(
+        sparse_image.file_map['//system/file2'].extra['incomplete'])
     self.assertTrue(
         sparse_image.file_map['/system/app/file3'].extra['incomplete'])
 
@@ -1249,11 +1299,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'avb_system_key_path': pubkey,
         'avb_system_rollback_index_location': 2,
     }
-    args = common.GetAvbChainedPartitionArg('system', info_dict).split(':')
-    self.assertEqual(3, len(args))
-    self.assertEqual('system', args[0])
-    self.assertEqual('2', args[1])
-    self.assertTrue(os.path.exists(args[2]))
+    chained_partition_args = common.GetAvbChainedPartitionArg(
+        'system', info_dict)
+    self.assertEqual('system', chained_partition_args.partition)
+    self.assertEqual(2, chained_partition_args.rollback_index_location)
+    self.assertTrue(os.path.exists(chained_partition_args.pubkey_path))
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_GetAvbChainedPartitionArg_withPrivateKey(self):
@@ -1263,11 +1313,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'avb_product_key_path': key,
         'avb_product_rollback_index_location': 2,
     }
-    args = common.GetAvbChainedPartitionArg('product', info_dict).split(':')
-    self.assertEqual(3, len(args))
-    self.assertEqual('product', args[0])
-    self.assertEqual('2', args[1])
-    self.assertTrue(os.path.exists(args[2]))
+    chained_partition_args = common.GetAvbChainedPartitionArg(
+        'product', info_dict)
+    self.assertEqual('product', chained_partition_args.partition)
+    self.assertEqual(2, chained_partition_args.rollback_index_location)
+    self.assertTrue(os.path.exists(chained_partition_args.pubkey_path))
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_GetAvbChainedPartitionArg_withSpecifiedKey(self):
@@ -1277,12 +1327,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'avb_system_rollback_index_location': 2,
     }
     pubkey = os.path.join(self.testdata_dir, 'testkey.pubkey.pem')
-    args = common.GetAvbChainedPartitionArg(
-        'system', info_dict, pubkey).split(':')
-    self.assertEqual(3, len(args))
-    self.assertEqual('system', args[0])
-    self.assertEqual('2', args[1])
-    self.assertTrue(os.path.exists(args[2]))
+    chained_partition_args = common.GetAvbChainedPartitionArg(
+        'system', info_dict, pubkey)
+    self.assertEqual('system', chained_partition_args.partition)
+    self.assertEqual(2, chained_partition_args.rollback_index_location)
+    self.assertTrue(os.path.exists(chained_partition_args.pubkey_path))
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_GetAvbChainedPartitionArg_invalidKey(self):
@@ -1299,8 +1348,7 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
   INFO_DICT_DEFAULT = {
       'recovery_api_version': 3,
       'fstab_version': 2,
-      'system_root_image': 'true',
-      'no_recovery' : 'true',
+      'no_recovery': 'true',
       'recovery_as_boot': 'true',
   }
 
@@ -1328,14 +1376,8 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
       info_values = ''.join(
           ['{}={}\n'.format(k, v) for k, v in sorted(info_dict.items())])
       common.ZipWriteStr(target_files_zip, 'META/misc_info.txt', info_values)
-
-      FSTAB_TEMPLATE = "/dev/block/system {} ext4 ro,barrier=1 defaults"
-      if info_dict.get('system_root_image') == 'true':
-        fstab_values = FSTAB_TEMPLATE.format('/')
-      else:
-        fstab_values = FSTAB_TEMPLATE.format('/system')
-      common.ZipWriteStr(target_files_zip, fstab_path, fstab_values)
-
+      common.ZipWriteStr(target_files_zip, fstab_path,
+                         "/dev/block/system /system ext4 ro,barrier=1 defaults")
       common.ZipWriteStr(
           target_files_zip, 'META/file_contexts', 'file-contexts')
     return target_files
@@ -1348,7 +1390,6 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
       loaded_dict = common.LoadInfoDict(target_files_zip)
       self.assertEqual(3, loaded_dict['recovery_api_version'])
       self.assertEqual(2, loaded_dict['fstab_version'])
-      self.assertIn('/', loaded_dict['fstab'])
       self.assertIn('/system', loaded_dict['fstab'])
 
   def test_LoadInfoDict_legacyRecoveryFstabPath(self):
@@ -1359,7 +1400,6 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
       loaded_dict = common.LoadInfoDict(target_files_zip)
       self.assertEqual(3, loaded_dict['recovery_api_version'])
       self.assertEqual(2, loaded_dict['fstab_version'])
-      self.assertIn('/', loaded_dict['fstab'])
       self.assertIn('/system', loaded_dict['fstab'])
 
   @test_utils.SkipIfExternalToolsUnavailable()
@@ -1371,7 +1411,6 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     loaded_dict = common.LoadInfoDict(unzipped)
     self.assertEqual(3, loaded_dict['recovery_api_version'])
     self.assertEqual(2, loaded_dict['fstab_version'])
-    self.assertIn('/', loaded_dict['fstab'])
     self.assertIn('/system', loaded_dict['fstab'])
 
   @test_utils.SkipIfExternalToolsUnavailable()
@@ -1383,15 +1422,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     loaded_dict = common.LoadInfoDict(unzipped)
     self.assertEqual(3, loaded_dict['recovery_api_version'])
     self.assertEqual(2, loaded_dict['fstab_version'])
-    self.assertIn('/', loaded_dict['fstab'])
     self.assertIn('/system', loaded_dict['fstab'])
 
-  def test_LoadInfoDict_systemRootImageFalse(self):
-    # Devices not using system-as-root nor recovery-as-boot. Non-A/B devices
-    # launched prior to P will likely have this config.
+  def test_LoadInfoDict_recoveryAsBootFalse(self):
     info_dict = copy.copy(self.INFO_DICT_DEFAULT)
     del info_dict['no_recovery']
-    del info_dict['system_root_image']
     del info_dict['recovery_as_boot']
     target_files = self._test_LoadInfoDict_createTargetFiles(
         info_dict,
@@ -1401,22 +1436,6 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
       self.assertEqual(3, loaded_dict['recovery_api_version'])
       self.assertEqual(2, loaded_dict['fstab_version'])
       self.assertNotIn('/', loaded_dict['fstab'])
-      self.assertIn('/system', loaded_dict['fstab'])
-
-  def test_LoadInfoDict_recoveryAsBootFalse(self):
-    # Devices using system-as-root, but with standalone recovery image. Non-A/B
-    # devices launched since P will likely have this config.
-    info_dict = copy.copy(self.INFO_DICT_DEFAULT)
-    del info_dict['no_recovery']
-    del info_dict['recovery_as_boot']
-    target_files = self._test_LoadInfoDict_createTargetFiles(
-        info_dict,
-        'RECOVERY/RAMDISK/system/etc/recovery.fstab')
-    with zipfile.ZipFile(target_files, 'r', allowZip64=True) as target_files_zip:
-      loaded_dict = common.LoadInfoDict(target_files_zip)
-      self.assertEqual(3, loaded_dict['recovery_api_version'])
-      self.assertEqual(2, loaded_dict['fstab_version'])
-      self.assertIn('/', loaded_dict['fstab'])
       self.assertIn('/system', loaded_dict['fstab'])
 
   def test_LoadInfoDict_noRecoveryTrue(self):
@@ -1450,7 +1469,6 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     loaded_dict = common.LoadInfoDict(unzipped, True)
     self.assertEqual(3, loaded_dict['recovery_api_version'])
     self.assertEqual(2, loaded_dict['fstab_version'])
-    self.assertIn('/', loaded_dict['fstab'])
     self.assertIn('/system', loaded_dict['fstab'])
     self.assertEqual(
         os.path.join(unzipped, 'ROOT'), loaded_dict['root_dir'])
@@ -1497,6 +1515,7 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'super_group_a_group_size': '1000',
         'super_group_b_partition_list': 'product',
         'super_group_b_group_size': '2000',
+        'vabc_cow_version': '2',
     }
     self.assertEqual(merged_dict, expected_merged_dict)
 
@@ -1507,6 +1526,7 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'dynamic_partition_list': 'system',
         'super_group_a_partition_list': 'system',
         'super_group_a_group_size': '5000',
+        'vabc_cow_version': '3',
     }
     vendor_dict = {
         'use_dynamic_partitions': 'true',
@@ -1528,6 +1548,7 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
         'super_group_a_group_size': '1000',
         'super_group_b_partition_list': 'product',
         'super_group_b_group_size': '2000',
+        'vabc_cow_version': '2',
     }
     self.assertEqual(merged_dict, expected_merged_dict)
 
@@ -1535,7 +1556,8 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     info_dict = {}
     cmd = common.GetAvbPartitionArg('system', '/path/to/system.img', info_dict)
     self.assertEqual(
-        ['--include_descriptors_from_image', '/path/to/system.img'], cmd)
+        [common.AVB_ARG_NAME_INCLUDE_DESC_FROM_IMG, '/path/to/system.img'],
+        cmd)
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_AppendVBMetaArgsForPartition_vendorAsChainedPartition(self):
@@ -1548,12 +1570,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     }
     cmd = common.GetAvbPartitionArg('vendor', '/path/to/vendor.img', info_dict)
     self.assertEqual(2, len(cmd))
-    self.assertEqual('--chain_partition', cmd[0])
-    chained_partition_args = cmd[1].split(':')
-    self.assertEqual(3, len(chained_partition_args))
-    self.assertEqual('vendor', chained_partition_args[0])
-    self.assertEqual('5', chained_partition_args[1])
-    self.assertTrue(os.path.exists(chained_partition_args[2]))
+    self.assertEqual(common.AVB_ARG_NAME_CHAIN_PARTITION, cmd[0])
+    chained_partition_args = cmd[1]
+    self.assertEqual('vendor', chained_partition_args.partition)
+    self.assertEqual(5, chained_partition_args.rollback_index_location)
+    self.assertTrue(os.path.exists(chained_partition_args.pubkey_path))
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_AppendVBMetaArgsForPartition_recoveryAsChainedPartition_nonAb(self):
@@ -1581,94 +1602,11 @@ class CommonUtilsTest(test_utils.ReleaseToolsTestCase):
     cmd = common.GetAvbPartitionArg(
         'recovery', '/path/to/recovery.img', info_dict)
     self.assertEqual(2, len(cmd))
-    self.assertEqual('--chain_partition', cmd[0])
-    chained_partition_args = cmd[1].split(':')
-    self.assertEqual(3, len(chained_partition_args))
-    self.assertEqual('recovery', chained_partition_args[0])
-    self.assertEqual('3', chained_partition_args[1])
-    self.assertTrue(os.path.exists(chained_partition_args[2]))
-
-  def test_BuildVBMeta_appendAftlCommandSyntax(self):
-    testdata_dir = test_utils.get_testdata_dir()
-    common.OPTIONS.info_dict = {
-        'ab_update': 'true',
-        'avb_avbtool': 'avbtool',
-        'build.prop': common.PartitionBuildProps.FromDictionary(
-            'system', {
-                'ro.build.version.incremental': '6285659',
-                'ro.product.device': 'coral',
-                'ro.build.fingerprint':
-                'google/coral/coral:R/RP1A.200311.002/'
-                '6285659:userdebug/dev-keys'}
-        ),
-    }
-    common.OPTIONS.aftl_tool_path = 'aftltool'
-    common.OPTIONS.aftl_server = 'log.endpoints.aftl-dev.cloud.goog:9000'
-    common.OPTIONS.aftl_key_path = os.path.join(testdata_dir,
-                                                'test_transparency_key.pub')
-    common.OPTIONS.aftl_manufacturer_key_path = os.path.join(
-        testdata_dir, 'test_aftl_rsa4096.pem')
-
-    vbmeta_image = tempfile.NamedTemporaryFile(delete=False)
-    cmd = common.ConstructAftlMakeImageCommands(vbmeta_image.name)
-    expected_cmd = [
-        'aftltool', 'make_icp_from_vbmeta',
-        '--vbmeta_image_path', 'place_holder',
-        '--output', vbmeta_image.name,
-        '--version_incremental', '6285659',
-        '--transparency_log_servers',
-        'log.endpoints.aftl-dev.cloud.goog:9000,{}'.format(
-            common.OPTIONS.aftl_key_path),
-        '--manufacturer_key', common.OPTIONS.aftl_manufacturer_key_path,
-        '--algorithm', 'SHA256_RSA4096',
-        '--padding', '4096']
-
-    # ignore the place holder, i.e. path to a temp file
-    self.assertEqual(cmd[:3], expected_cmd[:3])
-    self.assertEqual(cmd[4:], expected_cmd[4:])
-
-  @unittest.skip("enable after we have a server for public")
-  def test_BuildVBMeta_appendAftlContactServer(self):
-    testdata_dir = test_utils.get_testdata_dir()
-    common.OPTIONS.info_dict = {
-        'ab_update': 'true',
-        'avb_avbtool': 'avbtool',
-        'build.prop': common.PartitionBuildProps.FromDictionary(
-            'system', {
-                'ro.build.version.incremental': '6285659',
-                'ro.product.device': 'coral',
-                'ro.build.fingerprint':
-                'google/coral/coral:R/RP1A.200311.002/'
-                '6285659:userdebug/dev-keys'}
-        )
-    }
-    common.OPTIONS.aftl_tool_path = "aftltool"
-    common.OPTIONS.aftl_server = "log.endpoints.aftl-dev.cloud.goog:9000"
-    common.OPTIONS.aftl_key_path = os.path.join(testdata_dir,
-                                                'test_transparency_key.pub')
-    common.OPTIONS.aftl_manufacturer_key_path = os.path.join(
-        testdata_dir, 'test_aftl_rsa4096.pem')
-
-    input_dir = common.MakeTempDir()
-    system_image = common.MakeTempFile()
-    build_image_cmd = ['mkuserimg_mke2fs', input_dir, system_image, 'ext4',
-                       '/system', str(4096 * 100), '-j', '0', '-s']
-    common.RunAndCheckOutput(build_image_cmd)
-
-    add_footer_cmd = ['avbtool', 'add_hashtree_footer',
-                      '--partition_size', str(4096 * 150),
-                      '--partition_name', 'system',
-                      '--image', system_image]
-    common.RunAndCheckOutput(add_footer_cmd)
-
-    vbmeta_image = common.MakeTempFile()
-    common.BuildVBMeta(vbmeta_image, {'system': system_image}, 'vbmeta',
-                       ['system'])
-
-    verify_cmd = ['aftltool', 'verify_image_icp', '--vbmeta_image_path',
-                  vbmeta_image, '--transparency_log_pub_keys',
-                  common.OPTIONS.aftl_key_path]
-    common.RunAndCheckOutput(verify_cmd)
+    self.assertEqual(common.AVB_ARG_NAME_CHAIN_PARTITION, cmd[0])
+    chained_partition_args = cmd[1]
+    self.assertEqual('recovery', chained_partition_args.partition)
+    self.assertEqual(3, chained_partition_args.rollback_index_location)
+    self.assertTrue(os.path.exists(chained_partition_args.pubkey_path))
 
 
 class InstallRecoveryScriptFormatTest(test_utils.ReleaseToolsTestCase):
@@ -1680,7 +1618,7 @@ class InstallRecoveryScriptFormatTest(test_utils.ReleaseToolsTestCase):
   def setUp(self):
     self._tempdir = common.MakeTempDir()
     # Create a fake dict that contains the fstab info for boot&recovery.
-    self._info = {"fstab" : {}}
+    self._info = {"fstab": {}}
     fake_fstab = [
         "/dev/soc.0/by-name/boot /boot emmc defaults defaults",
         "/dev/soc.0/by-name/recovery /recovery emmc defaults defaults"]
@@ -2027,11 +1965,11 @@ class PartitionBuildPropsTest(test_utils.ReleaseToolsTestCase):
           input_zip, 'odm', placeholder_values)
 
     self.assertEqual({
-      'ro.odm.build.date.utc': '1578430045',
-      'ro.odm.build.fingerprint':
-      'google/coral/coral:10/RP1A.200325.001/6337676:user/dev-keys',
-      'ro.product.odm.device': 'coral',
-      'ro.product.odm.name': 'product1',
+        'ro.odm.build.date.utc': '1578430045',
+        'ro.odm.build.fingerprint':
+        'google/coral/coral:10/RP1A.200325.001/6337676:user/dev-keys',
+        'ro.product.odm.device': 'coral',
+        'ro.product.odm.name': 'product1',
     }, partition_props.build_props)
 
     with zipfile.ZipFile(input_file, 'r', allowZip64=True) as input_zip:
@@ -2193,3 +2131,37 @@ class PartitionBuildPropsTest(test_utils.ReleaseToolsTestCase):
       }
       self.assertRaises(ValueError, common.PartitionBuildProps.FromInputFile,
                         input_zip, 'odm', placeholder_values)
+
+  def test_partitionBuildProps_fromInputFile_deepcopy(self):
+    build_prop = [
+        'ro.odm.build.date.utc=1578430045',
+        'ro.odm.build.fingerprint='
+        'google/coral/coral:10/RP1A.200325.001/6337676:user/dev-keys',
+        'ro.product.odm.device=coral',
+    ]
+    input_file = self._BuildZipFile({
+        'ODM/etc/build.prop': '\n'.join(build_prop),
+    })
+
+    with zipfile.ZipFile(input_file, 'r', allowZip64=True) as input_zip:
+      placeholder_values = {
+          'ro.boot.product.device_name': ['std', 'pro']
+      }
+      partition_props = common.PartitionBuildProps.FromInputFile(
+          input_zip, 'odm', placeholder_values)
+
+    copied_props = copy.deepcopy(partition_props)
+    self.assertEqual({
+        'ro.odm.build.date.utc': '1578430045',
+        'ro.odm.build.fingerprint':
+        'google/coral/coral:10/RP1A.200325.001/6337676:user/dev-keys',
+        'ro.product.odm.device': 'coral',
+    }, copied_props.build_props)
+
+
+class DeviceSpecificParamsTest(test_utils.ReleaseToolsTestCase):
+
+  def test_missingSource(self):
+    common.OPTIONS.device_specific = '/does_not_exist'
+    ds = DeviceSpecificParams()
+    self.assertIsNone(ds.module)

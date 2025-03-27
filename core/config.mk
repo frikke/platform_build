@@ -42,6 +42,9 @@ endif
 # Mark variables deprecated/obsolete
 CHANGES_URL := https://android.googlesource.com/platform/build/+/master/Changes.md
 .KATI_READONLY := CHANGES_URL
+$(KATI_deprecated_var TARGET_USES_64_BIT_BINDER,All devices use 64-bit binder by default now. Uses of TARGET_USES_64_BIT_BINDER should be removed.)
+$(KATI_deprecated_var PRODUCT_SEPOLICY_SPLIT,All devices are built with split sepolicy.)
+$(KATI_deprecated_var PRODUCT_SEPOLICY_SPLIT_OVERRIDE,All devices are built with split sepolicy.)
 $(KATI_obsolete_var PATH,Do not use PATH directly. See $(CHANGES_URL)#PATH)
 $(KATI_obsolete_var PYTHONPATH,Do not use PYTHONPATH directly. See $(CHANGES_URL)#PYTHONPATH)
 $(KATI_obsolete_var OUT,Use OUT_DIR instead. See $(CHANGES_URL)#OUT)
@@ -107,6 +110,7 @@ $(KATI_obsolete_var BUILD_BROKEN_DUP_COPY_HEADERS)
 $(KATI_obsolete_var BUILD_BROKEN_ENG_DEBUG_TAGS)
 $(KATI_obsolete_export It is a global setting. See $(CHANGES_URL)#export_keyword)
 $(KATI_obsolete_var BUILD_BROKEN_ANDROIDMK_EXPORTS)
+$(KATI_obsolete_var PRODUCT_NOTICE_SPLIT_OVERRIDE,Stop using this, keep calm, and carry on.)
 $(KATI_obsolete_var PRODUCT_STATIC_BOOT_CONTROL_HAL,Use shared library module instead. See $(CHANGES_URL)#PRODUCT_STATIC_BOOT_CONTROL_HAL)
 $(KATI_obsolete_var \
   ARCH_ARM_HAVE_ARMV7A \
@@ -149,15 +153,27 @@ $(KATI_obsolete_var \
   2ND_TARGET_PROJECT_SYSTEM_INCLUDES \
   ,Project include variables have been removed)
 $(KATI_obsolete_var TARGET_PREFER_32_BIT TARGET_PREFER_32_BIT_APPS TARGET_PREFER_32_BIT_EXECUTABLES)
-$(KATI_obsolete_var PRODUCT_ARTIFACT_SYSTEM_CERTIFICATE_REQUIREMENT_WHITELIST,Use PRODUCT_ARTIFACT_SYSTEM_CERTIFICATE_REQUIREMENT_ALLOW_LIST.)
-$(KATI_obsolete_var PRODUCT_ARTIFACT_PATH_REQUIREMENT_WHITELIST,Use PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST.)
+$(KATI_obsolete_var PRODUCT_ARTIFACT_SYSTEM_CERTIFICATE_REQUIREMENT_WHITELIST,Use PRODUCT_ARTIFACT_SYSTEM_CERTIFICATE_REQUIREMENT_ALLOW_LIST)
+$(KATI_obsolete_var PRODUCT_ARTIFACT_PATH_REQUIREMENT_WHITELIST,Use PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST)
 $(KATI_obsolete_var COVERAGE_PATHS,Use NATIVE_COVERAGE_PATHS instead)
 $(KATI_obsolete_var COVERAGE_EXCLUDE_PATHS,Use NATIVE_COVERAGE_EXCLUDE_PATHS instead)
-$(KATI_obsolete_var BOARD_VNDK_RUNTIME_DISABLE,VNDK-Lite is no longer supported.)
-$(KATI_obsolete_var LOCAL_SANITIZE_BLACKLIST,Use LOCAL_SANITIZE_BLOCKLIST instead.)
-$(KATI_deprecated_var BOARD_PLAT_PUBLIC_SEPOLICY_DIR,Use SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS instead.)
-$(KATI_deprecated_var BOARD_PLAT_PRIVATE_SEPOLICY_DIR,Use SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS instead.)
+$(KATI_obsolete_var BOARD_VNDK_RUNTIME_DISABLE,VNDK-Lite is no longer supported)
+$(KATI_obsolete_var LOCAL_SANITIZE_BLACKLIST,Use LOCAL_SANITIZE_BLOCKLIST instead)
+$(KATI_obsolete_var BOARD_PLAT_PUBLIC_SEPOLICY_DIR,Use SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS instead)
+$(KATI_obsolete_var BOARD_PLAT_PRIVATE_SEPOLICY_DIR,Use SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS instead)
 $(KATI_obsolete_var TARGET_NO_VENDOR_BOOT,Use PRODUCT_BUILD_VENDOR_BOOT_IMAGE instead)
+$(KATI_obsolete_var PRODUCT_CHECK_ELF_FILES,Use BUILD_BROKEN_PREBUILT_ELF_FILES instead)
+$(KATI_obsolete_var ALL_GENERATED_SOURCES,ALL_GENERATED_SOURCES is no longer used)
+$(KATI_obsolete_var ALL_ORIGINAL_DYNAMIC_BINARIES,ALL_ORIGINAL_DYNAMIC_BINARIES is no longer used)
+$(KATI_obsolete_var PRODUCT_SUPPORTS_VERITY,VB 1.0 and related variables are no longer supported)
+$(KATI_obsolete_var PRODUCT_SUPPORTS_VERITY_FEC,VB 1.0 and related variables are no longer supported)
+$(KATI_obsolete_var PRODUCT_SUPPORTS_BOOT_SIGNER,VB 1.0 and related variables are no longer supported)
+$(KATI_obsolete_var PRODUCT_VERITY_SIGNING_KEY,VB 1.0 and related variables are no longer supported)
+$(KATI_obsolete_var BOARD_PREBUILT_PVMFWIMAGE,pvmfw.bin is now built in AOSP and custom versions are no longer supported)
+$(KATI_obsolete_var BUILDING_PVMFW_IMAGE,BUILDING_PVMFW_IMAGE is no longer used)
+$(KATI_obsolete_var BOARD_BUILD_SYSTEM_ROOT_IMAGE)
+$(KATI_obsolete_var FS_GET_STATS)
+$(KATI_obsolete_var BUILD_BROKEN_USES_SOONG_PYTHON2_MODULES)
 
 # Used to force goals to build.  Only use for conditionally defined goals.
 .PHONY: FORCE
@@ -223,8 +239,7 @@ BUILD_NATIVE_TEST :=$= $(BUILD_SYSTEM)/native_test.mk
 BUILD_FUZZ_TEST :=$= $(BUILD_SYSTEM)/fuzz_test.mk
 
 BUILD_NOTICE_FILE :=$= $(BUILD_SYSTEM)/notice_files.mk
-BUILD_HOST_DALVIK_JAVA_LIBRARY :=$= $(BUILD_SYSTEM)/host_dalvik_java_library.mk
-BUILD_HOST_DALVIK_STATIC_JAVA_LIBRARY :=$= $(BUILD_SYSTEM)/host_dalvik_static_java_library.mk
+BUILD_SBOM_GEN :=$= $(BUILD_SYSTEM)/sbom.mk
 
 include $(BUILD_SYSTEM)/deprecation.mk
 
@@ -251,14 +266,18 @@ endef
 # Initialize SOONG_CONFIG_NAMESPACES so that it isn't recursive.
 SOONG_CONFIG_NAMESPACES :=
 
+# TODO(asmundak): remove add_soong_config_namespace, add_soong_config_var,
+# and add_soong_config_var_value once all their usages are replaced with
+# soong_config_set/soong_config_append.
+
 # The add_soong_config_namespace function adds a namespace and initializes it
 # to be empty.
 # $1 is the namespace.
 # Ex: $(call add_soong_config_namespace,acme)
 
 define add_soong_config_namespace
-$(eval SOONG_CONFIG_NAMESPACES += $1) \
-$(eval SOONG_CONFIG_$1 :=)
+$(eval SOONG_CONFIG_NAMESPACES += $(strip $1)) \
+$(eval SOONG_CONFIG_$(strip $1) :=)
 endef
 
 # The add_soong_config_var function adds a a list of soong config variables to
@@ -267,8 +286,8 @@ endef
 # $1 is the namespace. $2 is the list of variables.
 # Ex: $(call add_soong_config_var,acme,COOL_FEATURE_A COOL_FEATURE_B)
 define add_soong_config_var
-$(eval SOONG_CONFIG_$1 += $2) \
-$(foreach v,$2,$(eval SOONG_CONFIG_$1_$v := $($v)))
+$(eval SOONG_CONFIG_$(strip $1) += $(strip $2)) \
+$(foreach v,$(strip $2),$(eval SOONG_CONFIG_$(strip $1)_$v := $(strip $($v))))
 endef
 
 # The add_soong_config_var_value function defines a make variable and also adds
@@ -277,8 +296,80 @@ endef
 # Ex: $(call add_soong_config_var_value,acme,COOL_FEATURE,true)
 
 define add_soong_config_var_value
-$(eval $2 := $3) \
+$(eval $(strip $2) := $(strip $3)) \
 $(call add_soong_config_var,$1,$2)
+endef
+
+# Soong config namespace variables manipulation.
+#
+# internal utility to define a namespace and a variable in it.
+define soong_config_define_internal
+$(if $(filter $1,$(SOONG_CONFIG_NAMESPACES)),,$(eval SOONG_CONFIG_NAMESPACES:=$(SOONG_CONFIG_NAMESPACES) $(strip $1))) \
+$(if $(filter $2,$(SOONG_CONFIG_$(strip $1))),,$(eval SOONG_CONFIG_$(strip $1):=$(SOONG_CONFIG_$(strip $1)) $(strip $2)))
+endef
+
+# soong_config_set defines the variable in the given Soong config namespace
+# and sets its value. If the namespace does not exist, it will be defined.
+# $1 is the namespace. $2 is the variable name. $3 is the variable value.
+# Ex: $(call soong_config_set,acme,COOL_FEATURE,true)
+define soong_config_set
+$(call soong_config_define_internal,$1,$2) \
+$(eval SOONG_CONFIG_$(strip $1)_$(strip $2):=$(strip $3))
+endef
+
+# soong_config_set_bool is the same as soong_config_set, but it will
+# also type the variable as a bool, so that when using select() expressions
+# in blueprint files they can use boolean values instead of strings.
+# It will only accept "true" for its value, any other value will be
+# treated as false.
+# $1 is the namespace. $2 is the variable name. $3 is the variable value.
+# Ex: $(call soong_config_set_bool,acme,COOL_FEATURE,true)
+define soong_config_set_bool
+$(call soong_config_define_internal,$1,$2) \
+$(eval SOONG_CONFIG_$(strip $1)_$(strip $2):=$(filter true,$3))
+$(eval SOONG_CONFIG_TYPE_$(strip $1)_$(strip $2):=bool)
+endef
+
+# soong_config_set_int is the same as soong_config_set, but it will
+# also type the variable as an integer, so that when using select() expressions
+# in blueprint files they can use integer values instead of strings.
+# It will error out if a non-integer is supplied
+# $1 is the namespace. $2 is the variable name. $3 is the variable value.
+# Ex: $(call soong_config_set_bool,acme,COOL_FEATURE,34)
+define soong_config_set_int
+$(call soong_config_define_internal,$1,$2) \
+$(if $(call math_is_int,$3),,$(error soong_config_set_int called with non-integer value $(3)))
+$(eval SOONG_CONFIG_$(strip $1)_$(strip $2):=$(strip $3))
+$(eval SOONG_CONFIG_TYPE_$(strip $1)_$(strip $2):=int)
+endef
+
+# soong_config_set_string_list is the same as soong_config_set, but it will
+# also type the variable as a list of strings, so that when using select() expressions
+# in blueprint files they can use list values instead of strings.
+# The values of the list must be space-separated.
+# $1 is the namespace. $2 is the variable name. $3 is the variable value.
+# Ex: $(call soong_config_set_string_list,acme,COOL_LIBS,a b)
+define soong_config_set_string_list
+$(call soong_config_define_internal,$1,$2) \
+$(eval SOONG_CONFIG_$(strip $1)_$(strip $2):=$(strip $3))
+$(eval SOONG_CONFIG_TYPE_$(strip $1)_$(strip $2):=string_list)
+endef
+
+# soong_config_append appends to the value of the variable in the given Soong
+# config namespace. If the variable does not exist, it will be defined. If the
+# namespace does not  exist, it will be defined.
+# $1 is the namespace, $2 is the variable name, $3 is the value
+define soong_config_append
+$(call soong_config_define_internal,$1,$2) \
+$(eval SOONG_CONFIG_$(strip $1)_$(strip $2):=$(SOONG_CONFIG_$(strip $1)_$(strip $2)) $(strip $3))
+endef
+
+# soong_config_append gets to the value of the variable in the given Soong
+# config namespace. If the namespace or variables does not exist, an
+# empty string will be returned.
+# $1 is the namespace, $2 is the variable name
+define soong_config_get
+$(SOONG_CONFIG_$(strip $1)_$(strip $2))
 endef
 
 # Set the extensions used for various packages
@@ -291,6 +382,22 @@ JAVA_TMPDIR_ARG := -Djava.io.tmpdir=$(TMPDIR)
 else
 JAVA_TMPDIR_ARG :=
 endif
+
+# These build broken variables are intended to be set in a buildspec file,
+# while other build broken flags are expected to be set in a board config.
+# These are build broken variables that are expected to apply across board
+# configs, generally for cross-cutting features.
+
+# Build broken variables that should be treated as booleans
+_build_broken_bool_vars :=
+
+# Build broken variables that should be treated as lists
+_build_broken_list_vars := \
+  BUILD_BROKEN_PLUGIN_VALIDATION \
+
+_build_broken_var_names := $(_build_broken_bool_vars)
+_build_broken_var_names += $(_build_broken_list_vars)
+$(foreach v,$(_build_broken_var_names),$(eval $(v) :=))
 
 # ###############################################################
 # Include sub-configuration files
@@ -310,6 +417,55 @@ endif
 # Define most of the global variables.  These are the ones that
 # are specific to the user's build configuration.
 include $(BUILD_SYSTEM)/envsetup.mk
+
+
+$(foreach var,$(_build_broken_bool_vars), \
+  $(if $(filter-out true false,$($(var))), \
+    $(error Valid values of $(var) are "true", "false", and "". Not "$($(var))")))
+
+.KATI_READONLY := $(_build_broken_var_names)
+
+# Returns true if it is a low memory device, otherwise it returns false.
+define is-low-mem-device
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_PROPERTY_OVERRIDES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_DEFAULT_PROPERTY_OVERRIDES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_COMPATIBLE_PROPERTY_OVERRIDE)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_COMPATIBLE_PROPERTY)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_SYSTEM_DEFAULT_PROPERTIES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_SYSTEM_EXT_PROPERTIES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_PRODUCT_PROPERTIES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_VENDOR_PROPERTIES)),true,\
+$(if $(findstring ro.config.low_ram=true,$(PRODUCT_ODM_PROPERTIES)),true,false)))))))))
+endef
+
+# Set TARGET_MAX_PAGE_SIZE_SUPPORTED.
+# TARGET_MAX_PAGE_SIZE_SUPPORTED indicates the alignment of the ELF segments.
+ifdef PRODUCT_MAX_PAGE_SIZE_SUPPORTED
+  TARGET_MAX_PAGE_SIZE_SUPPORTED := $(PRODUCT_MAX_PAGE_SIZE_SUPPORTED)
+else ifeq ($(strip $(call is-low-mem-device)),true)
+  # Low memory device will have 4096 binary alignment.
+  TARGET_MAX_PAGE_SIZE_SUPPORTED := 4096
+else ifeq ($(call math_lt,$(VSR_VENDOR_API_LEVEL),34),true)
+  TARGET_MAX_PAGE_SIZE_SUPPORTED := 4096
+else ifeq (,$(filter arm64 x86_64,$(TARGET_ARCH)))
+  # TARGET_MAX_PAGE_SIZE_SUPPORTED > 4096 is only supported in arm64 and
+  # x86_64 targets.
+  TARGET_MAX_PAGE_SIZE_SUPPORTED := 4096
+else
+  # The default binary alignment for userspace is 16384.
+  TARGET_MAX_PAGE_SIZE_SUPPORTED := 16384
+endif
+.KATI_READONLY := TARGET_MAX_PAGE_SIZE_SUPPORTED
+
+# Boolean variable determining if AOSP relies on bionic's PAGE_SIZE macro.
+ifdef PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO
+  TARGET_NO_BIONIC_PAGE_SIZE_MACRO := $(PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO)
+else ifeq ($(call math_lt,$(VSR_VENDOR_API_LEVEL),35),true)
+  TARGET_NO_BIONIC_PAGE_SIZE_MACRO := false
+else
+  TARGET_NO_BIONIC_PAGE_SIZE_MACRO := true
+endif
+.KATI_READONLY := TARGET_NO_BIONIC_PAGE_SIZE_MACRO
 
 # Pruned directory options used when using findleaves.py
 # See envsetup.mk for a description of SCAN_EXCLUDE_DIRS
@@ -386,9 +542,11 @@ $(hide) $(HOST_OTOOL) -l $(1) | grep LC_ID_DYLIB -A 5 > $(2)
 $(hide) $(HOST_NM) -gP $(1) | cut -f1-2 -d" " | (grep -v U$$ >> $(2) || true)
 endef
 
+# Pick a Java compiler.
+include $(BUILD_SYSTEM)/combo/javac.mk
+
 ifeq ($(CALLED_FROM_SETUP),true)
 include $(BUILD_SYSTEM)/ccache.mk
-include $(BUILD_SYSTEM)/goma.mk
 include $(BUILD_SYSTEM)/rbe.mk
 endif
 
@@ -407,9 +565,6 @@ endif
 ifeq (,$(filter 1 true,$(WITH_TIDY_ONLY)))
   WITH_TIDY_ONLY :=
 endif
-
-# Pick a Java compiler.
-include $(BUILD_SYSTEM)/combo/javac.mk
 
 # ---------------------------------------------------------------
 # Check that the configuration is current.  We check that
@@ -444,13 +599,22 @@ endif
 ifneq ($(filter true,$(SOONG_ALLOW_MISSING_DEPENDENCIES)),)
 ALLOW_MISSING_DEPENDENCIES := true
 endif
+# Mac builds default to ALLOW_MISSING_DEPENDENCIES, at least until the host
+# tools aren't enabled by default for Mac.
+ifeq ($(HOST_OS),darwin)
+  ALLOW_MISSING_DEPENDENCIES := true
+endif
 .KATI_READONLY := ALLOW_MISSING_DEPENDENCIES
 
 TARGET_BUILD_USE_PREBUILT_SDKS :=
 DISABLE_PREOPT :=
+DISABLE_PREOPT_BOOT_IMAGES :=
 ifneq (,$(TARGET_BUILD_APPS)$(TARGET_BUILD_UNBUNDLED_IMAGE))
   DISABLE_PREOPT := true
-  ifndef UNBUNDLED_BUILD_SDKS_FROM_SOURCE
+  DISABLE_PREOPT_BOOT_IMAGES := true
+endif
+ifeq (true,$(TARGET_BUILD_UNBUNDLED))
+  ifneq (true,$(UNBUNDLED_BUILD_SDKS_FROM_SOURCE))
     TARGET_BUILD_USE_PREBUILT_SDKS := true
   endif
 endif
@@ -458,6 +622,7 @@ endif
 .KATI_READONLY := \
   TARGET_BUILD_USE_PREBUILT_SDKS \
   DISABLE_PREOPT \
+  DISABLE_PREOPT_BOOT_IMAGES \
 
 prebuilt_sdk_tools := prebuilts/sdk/tools
 prebuilt_sdk_tools_bin := $(prebuilt_sdk_tools)/$(HOST_OS)/bin
@@ -472,8 +637,6 @@ else
 prebuilt_build_tools_bin := $(prebuilt_build_tools)/$(HOST_PREBUILT_TAG)/asan/bin
 endif
 
-USE_PREBUILT_SDK_TOOLS_IN_PLACE := true
-
 # Work around for b/68406220
 # This should match the soong version.
 USE_D8 := true
@@ -484,11 +647,8 @@ USE_D8 := true
 #
 ifeq (,$(TARGET_BUILD_USE_PREBUILT_SDKS))
   AAPT := $(HOST_OUT_EXECUTABLES)/aapt
-  MAINDEXCLASSES := $(HOST_OUT_EXECUTABLES)/mainDexClasses
-
 else # TARGET_BUILD_USE_PREBUILT_SDKS
   AAPT := $(prebuilt_sdk_tools_bin)/aapt
-  MAINDEXCLASSES := $(prebuilt_sdk_tools)/mainDexClasses
 endif # TARGET_BUILD_USE_PREBUILT_SDKS
 
 ifeq (,$(TARGET_BUILD_USE_PREBUILT_SDKS))
@@ -506,14 +666,15 @@ prebuilt_sdk_tools_bin :=
 ACP := $(prebuilt_build_tools_bin)/acp
 CKATI := $(prebuilt_build_tools_bin)/ckati
 DEPMOD := $(HOST_OUT_EXECUTABLES)/depmod
-FILESLIST := $(SOONG_HOST_OUT_EXECUTABLES)/fileslist
+FILESLIST := $(HOST_OUT_EXECUTABLES)/fileslist
 FILESLIST_UTIL :=$= build/make/tools/fileslist_util.py
 HOST_INIT_VERIFIER := $(HOST_OUT_EXECUTABLES)/host_init_verifier
-XMLLINT := $(SOONG_HOST_OUT_EXECUTABLES)/xmllint
+XMLLINT := $(HOST_OUT_EXECUTABLES)/xmllint
+ACONFIG := $(HOST_OUT_EXECUTABLES)/aconfig
 
 # SOONG_ZIP is exported by Soong, but needs to be defined early for
 # $OUT/dexpreopt.global.  It will be verified against the Soong version.
-SOONG_ZIP := $(SOONG_HOST_OUT_EXECUTABLES)/soong_zip
+SOONG_ZIP := $(HOST_OUT_EXECUTABLES)/soong_zip
 
 # ---------------------------------------------------------------
 # Generic tools.
@@ -530,21 +691,16 @@ else
 # For non-supported hosts, do not generate breakpad symbols.
 BREAKPAD_GENERATE_SYMBOLS := false
 endif
+GZIP := prebuilts/build-tools/path/$(BUILD_OS)-$(HOST_PREBUILT_ARCH)/gzip
 PROTOC := $(HOST_OUT_EXECUTABLES)/aprotoc$(HOST_EXECUTABLE_SUFFIX)
 NANOPB_SRCS := $(HOST_OUT_EXECUTABLES)/protoc-gen-nanopb
-VTSC := $(HOST_OUT_EXECUTABLES)/vtsc$(HOST_EXECUTABLE_SUFFIX)
 MKBOOTFS := $(HOST_OUT_EXECUTABLES)/mkbootfs$(HOST_EXECUTABLE_SUFFIX)
-MINIGZIP := $(HOST_OUT_EXECUTABLES)/minigzip$(HOST_EXECUTABLE_SUFFIX)
+MINIGZIP := $(GZIP)
 LZ4 := $(HOST_OUT_EXECUTABLES)/lz4$(HOST_EXECUTABLE_SUFFIX)
 ifeq (,$(strip $(BOARD_CUSTOM_MKBOOTIMG)))
 MKBOOTIMG := $(HOST_OUT_EXECUTABLES)/mkbootimg$(HOST_EXECUTABLE_SUFFIX)
 else
 MKBOOTIMG := $(BOARD_CUSTOM_MKBOOTIMG)
-endif
-ifeq (,$(strip $(BOARD_CUSTOM_BPTTOOL)))
-BPTTOOL := $(HOST_OUT_EXECUTABLES)/bpttool$(HOST_EXECUTABLE_SUFFIX)
-else
-BPTTOOL := $(BOARD_CUSTOM_BPTTOOL)
 endif
 ifeq (,$(strip $(BOARD_CUSTOM_AVBTOOL)))
 AVBTOOL := $(HOST_OUT_EXECUTABLES)/avbtool$(HOST_EXECUTABLE_SUFFIX)
@@ -552,45 +708,49 @@ else
 AVBTOOL := $(BOARD_CUSTOM_AVBTOOL)
 endif
 APICHECK := $(HOST_OUT_JAVA_LIBRARIES)/metalava$(COMMON_JAVA_PACKAGE_SUFFIX)
-FS_GET_STATS := $(HOST_OUT_EXECUTABLES)/fs_get_stats$(HOST_EXECUTABLE_SUFFIX)
 MKEXTUSERIMG := $(HOST_OUT_EXECUTABLES)/mkuserimg_mke2fs
 MKE2FS_CONF := system/extras/ext4_utils/mke2fs.conf
-MKEROFSUSERIMG := $(HOST_OUT_EXECUTABLES)/mkerofsimage.sh
-MKSQUASHFSUSERIMG := $(HOST_OUT_EXECUTABLES)/mksquashfsimage.sh
-MKF2FSUSERIMG := $(HOST_OUT_EXECUTABLES)/mkf2fsuserimg.sh
+MKEROFS := $(HOST_OUT_EXECUTABLES)/mkfs.erofs
+MKSQUASHFSUSERIMG := $(HOST_OUT_EXECUTABLES)/mksquashfsimage
+MKF2FSUSERIMG := $(HOST_OUT_EXECUTABLES)/mkf2fsuserimg
 SIMG2IMG := $(HOST_OUT_EXECUTABLES)/simg2img$(HOST_EXECUTABLE_SUFFIX)
 E2FSCK := $(HOST_OUT_EXECUTABLES)/e2fsck$(HOST_EXECUTABLE_SUFFIX)
 TUNE2FS := $(HOST_OUT_EXECUTABLES)/tune2fs$(HOST_EXECUTABLE_SUFFIX)
 JARJAR := $(HOST_OUT_JAVA_LIBRARIES)/jarjar.jar
 DATA_BINDING_COMPILER := $(HOST_OUT_JAVA_LIBRARIES)/databinding-compiler.jar
 FAT16COPY := build/make/tools/fat16copy.py
-CHECK_ELF_FILE := build/make/tools/check_elf_file.py
+CHECK_ELF_FILE := $(HOST_OUT_EXECUTABLES)/check_elf_file$(HOST_EXECUTABLE_SUFFIX)
 LPMAKE := $(HOST_OUT_EXECUTABLES)/lpmake$(HOST_EXECUTABLE_SUFFIX)
 ADD_IMG_TO_TARGET_FILES := $(HOST_OUT_EXECUTABLES)/add_img_to_target_files$(HOST_EXECUTABLE_SUFFIX)
 BUILD_IMAGE := $(HOST_OUT_EXECUTABLES)/build_image$(HOST_EXECUTABLE_SUFFIX)
+ifeq (,$(strip $(BOARD_CUSTOM_BUILD_SUPER_IMAGE)))
 BUILD_SUPER_IMAGE := $(HOST_OUT_EXECUTABLES)/build_super_image$(HOST_EXECUTABLE_SUFFIX)
+else
+BUILD_SUPER_IMAGE := $(BOARD_CUSTOM_BUILD_SUPER_IMAGE)
+endif
 IMG_FROM_TARGET_FILES := $(HOST_OUT_EXECUTABLES)/img_from_target_files$(HOST_EXECUTABLE_SUFFIX)
+UNPACK_BOOTIMG := $(HOST_OUT_EXECUTABLES)/unpack_bootimg
 MAKE_RECOVERY_PATCH := $(HOST_OUT_EXECUTABLES)/make_recovery_patch$(HOST_EXECUTABLE_SUFFIX)
 OTA_FROM_TARGET_FILES := $(HOST_OUT_EXECUTABLES)/ota_from_target_files$(HOST_EXECUTABLE_SUFFIX)
+OTA_FROM_RAW_IMG := $(HOST_OUT_EXECUTABLES)/ota_from_raw_img$(HOST_EXECUTABLE_SUFFIX)
 SPARSE_IMG := $(HOST_OUT_EXECUTABLES)/sparse_img$(HOST_EXECUTABLE_SUFFIX)
 CHECK_PARTITION_SIZES := $(HOST_OUT_EXECUTABLES)/check_partition_sizes$(HOST_EXECUTABLE_SUFFIX)
+SYMBOLS_MAP := $(HOST_OUT_EXECUTABLES)/symbols_map
 
 PROGUARD_HOME := external/proguard
 PROGUARD := $(PROGUARD_HOME)/bin/proguard.sh
 PROGUARD_DEPS := $(PROGUARD) $(PROGUARD_HOME)/lib/proguard.jar
-JAVATAGS := build/make/tools/java-event-log-tags.py
-MERGETAGS := build/make/tools/merge-event-log-tags.py
+JAVATAGS := $(HOST_OUT_EXECUTABLES)/java-event-log-tags
+MERGETAGS := $(HOST_OUT_EXECUTABLES)/merge-event-log-tags
 APPEND2SIMG := $(HOST_OUT_EXECUTABLES)/append2simg
 VERITY_SIGNER := $(HOST_OUT_EXECUTABLES)/verity_signer
 BUILD_VERITY_METADATA := $(HOST_OUT_EXECUTABLES)/build_verity_metadata
 BUILD_VERITY_TREE := $(HOST_OUT_EXECUTABLES)/build_verity_tree
-BOOT_SIGNER := $(HOST_OUT_EXECUTABLES)/boot_signer
-FUTILITY := $(HOST_OUT_EXECUTABLES)/futility-host
-VBOOT_SIGNER := $(HOST_OUT_EXECUTABLES)/vboot_signer
-FEC := $(HOST_OUT_EXECUTABLES)/fec
 
 DEXDUMP := $(HOST_OUT_EXECUTABLES)/dexdump$(BUILD_EXECUTABLE_SUFFIX)
 PROFMAN := $(HOST_OUT_EXECUTABLES)/profman
+
+GEN_SBOM := $(HOST_OUT_EXECUTABLES)/generate-sbom
 
 FINDBUGS_DIR := external/owasp/sanitizer/tools/findbugs/bin
 FINDBUGS := $(FINDBUGS_DIR)/findbugs
@@ -602,7 +762,7 @@ EXTRACT_KERNEL := build/make/tools/extract_kernel.py
 # Path to tools.jar
 HOST_JDK_TOOLS_JAR := $(ANDROID_JAVA8_HOME)/lib/tools.jar
 
-APICHECK_COMMAND := $(JAVA) -Xmx4g -jar $(APICHECK) --no-banner --compatible-output=no
+APICHECK_COMMAND := $(JAVA) -Xmx4g -jar $(APICHECK)
 
 # Boolean variable determining if the allow list for compatible properties is enabled
 PRODUCT_COMPATIBLE_PROPERTY := true
@@ -613,50 +773,21 @@ endif
 .KATI_READONLY := \
     PRODUCT_COMPATIBLE_PROPERTY
 
-# Boolean variable determining if Treble is fully enabled
-PRODUCT_FULL_TREBLE := false
-ifneq ($(PRODUCT_FULL_TREBLE_OVERRIDE),)
-  PRODUCT_FULL_TREBLE := $(PRODUCT_FULL_TREBLE_OVERRIDE)
-else ifeq ($(PRODUCT_SHIPPING_API_LEVEL),)
-  #$(warning no product shipping level defined)
-else ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),26),)
-  PRODUCT_FULL_TREBLE := true
-endif
-
-# TODO(b/69865032): Make PRODUCT_NOTICE_SPLIT the default behavior and remove
-#    references to it here and below.
-ifdef PRODUCT_NOTICE_SPLIT_OVERRIDE
-   $(error PRODUCT_NOTICE_SPLIT_OVERRIDE cannot be set.)
-endif
-
-requirements := \
-    PRODUCT_TREBLE_LINKER_NAMESPACES \
-    PRODUCT_SEPOLICY_SPLIT \
-    PRODUCT_ENFORCE_VINTF_MANIFEST \
-    PRODUCT_NOTICE_SPLIT
-
-# If it is overriden, then the requirement override is taken, otherwise it's
-# PRODUCT_FULL_TREBLE
-$(foreach req,$(requirements),$(eval \
-    $(req) := $(if $($(req)_OVERRIDE),$($(req)_OVERRIDE),$(PRODUCT_FULL_TREBLE))))
-# If the requirement is false for any reason, then it's not PRODUCT_FULL_TREBLE
-$(foreach req,$(requirements),$(eval \
-    PRODUCT_FULL_TREBLE := $(if $(filter false,$($(req))),false,$(PRODUCT_FULL_TREBLE))))
-
-PRODUCT_FULL_TREBLE_OVERRIDE ?=
-$(foreach req,$(requirements),$(eval $(req)_OVERRIDE ?=))
+# TODO: remove all code referencing these, and remove override variables
+PRODUCT_FULL_TREBLE := true
+PRODUCT_TREBLE_LINKER_NAMESPACES := true
+PRODUCT_ENFORCE_VINTF_MANIFEST := true
 
 # TODO(b/114488870): disallow PRODUCT_FULL_TREBLE_OVERRIDE from being used.
 .KATI_READONLY := \
-    PRODUCT_FULL_TREBLE_OVERRIDE \
-    $(foreach req,$(requirements),$(req)_OVERRIDE) \
-    $(requirements) \
     PRODUCT_FULL_TREBLE \
+    PRODUCT_TREBLE_LINKER_NAMESPACES \
+    PRODUCT_ENFORCE_VINTF_MANIFEST \
 
-$(KATI_obsolete_var $(foreach req,$(requirements),$(req)_OVERRIDE) \
-    ,This should be referenced without the _OVERRIDE suffix.)
-
-requirements :=
+# TODO(b/114488870): remove all sets of these everwhere, and disallow them to be used
+$(KATI_obsolete_var PRODUCT_TREBLE_LINKER_NAMESPACES_OVERRIDE,Deprecated.)
+$(KATI_obsolete_var PRODUCT_ENFORCE_VINTF_MANIFEST_OVERRIDE,Deprecated.)
+$(KATI_obsolete_var PRODUCT_FULL_TREBLE_OVERRIDE,Deprecated.)
 
 # BOARD_PROPERTY_OVERRIDES_SPLIT_ENABLED can be true only if early-mount of
 # partitions is supported. But the early-mount must be supported for full
@@ -666,46 +797,31 @@ ifeq ($(PRODUCT_FULL_TREBLE),true)
   BOARD_PROPERTY_OVERRIDES_SPLIT_ENABLED ?= true
 endif
 
-# If PRODUCT_USE_VNDK is true and BOARD_VNDK_VERSION is not defined yet,
-# BOARD_VNDK_VERSION will be set to "current" as default.
-# PRODUCT_USE_VNDK will be true in Android-P or later launching devices.
-PRODUCT_USE_VNDK := false
-ifneq ($(PRODUCT_USE_VNDK_OVERRIDE),)
-  PRODUCT_USE_VNDK := $(PRODUCT_USE_VNDK_OVERRIDE)
-else ifeq ($(PRODUCT_SHIPPING_API_LEVEL),)
-  # No shipping level defined
-else ifeq ($(call math_gt,$(PRODUCT_SHIPPING_API_LEVEL),27),true)
-  PRODUCT_USE_VNDK := $(PRODUCT_FULL_TREBLE)
-endif
-
-ifeq ($(PRODUCT_USE_VNDK),true)
-  ifndef BOARD_VNDK_VERSION
-    BOARD_VNDK_VERSION := current
+ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),36),)
+  ifneq ($(NEED_AIDL_NDK_PLATFORM_BACKEND),)
+    $(error Must not set NEED_AIDL_NDK_PLATFORM_BACKEND, but it is set to: $(NEED_AIDL_NDK_PLATFORM_BACKEND). Support will be removed.)
   endif
 endif
 
-$(KATI_obsolete_var PRODUCT_USE_VNDK,Use BOARD_VNDK_VERSION instead)
-$(KATI_obsolete_var PRODUCT_USE_VNDK_OVERRIDE,Use BOARD_VNDK_VERSION instead)
-
-ifdef PRODUCT_PRODUCT_VNDK_VERSION
-  ifndef BOARD_VNDK_VERSION
-    # VNDK for product partition is not available unless BOARD_VNDK_VERSION
-    # defined.
-    $(error PRODUCT_PRODUCT_VNDK_VERSION cannot be defined without defining BOARD_VNDK_VERSION)
-  endif
+ifdef PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE
+  TARGET_CHECK_PREBUILT_MAX_PAGE_SIZE := $(PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE)
+else ifeq (true,$(TARGET_BUILD_UNBUNDLED))
+  # unbundled builds may not have updated build sources
+  TARGET_CHECK_PREBUILT_MAX_PAGE_SIZE := false
+else ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),36),)
+  TARGET_CHECK_PREBUILT_MAX_PAGE_SIZE := true
+else
+  TARGET_CHECK_PREBUILT_MAX_PAGE_SIZE := false
 endif
+.KATI_READONLY := TARGET_CHECK_PREBUILT_MAX_PAGE_SIZE
 
 # Set BOARD_SYSTEMSDK_VERSIONS to the latest SystemSDK version starting from P-launching
 # devices if unset.
 ifndef BOARD_SYSTEMSDK_VERSIONS
-  ifdef PRODUCT_SHIPPING_API_LEVEL
-  ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),28),)
-    ifeq (REL,$(PLATFORM_VERSION_CODENAME))
-      BOARD_SYSTEMSDK_VERSIONS := $(PLATFORM_SDK_VERSION)
-    else
-      BOARD_SYSTEMSDK_VERSIONS := $(PLATFORM_VERSION_CODENAME)
-    endif
-  endif
+  ifeq (REL,$(PLATFORM_VERSION_CODENAME))
+    BOARD_SYSTEMSDK_VERSIONS := $(PLATFORM_SDK_VERSION)
+  else
+    BOARD_SYSTEMSDK_VERSIONS := $(PLATFORM_VERSION_CODENAME)
   endif
 endif
 
@@ -721,16 +837,6 @@ endif
 .KATI_READONLY := BOARD_CURRENT_API_LEVEL_FOR_VENDOR_MODULES
 
 ifdef PRODUCT_SHIPPING_API_LEVEL
-  ifneq ($(call numbers_less_than,$(PRODUCT_SHIPPING_API_LEVEL),$(BOARD_SYSTEMSDK_VERSIONS)),)
-    $(error BOARD_SYSTEMSDK_VERSIONS ($(BOARD_SYSTEMSDK_VERSIONS)) must all be greater than or equal to PRODUCT_SHIPPING_API_LEVEL ($(PRODUCT_SHIPPING_API_LEVEL)))
-  endif
-  ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),28),)
-    ifneq ($(TARGET_IS_64_BIT), true)
-      ifneq ($(TARGET_USES_64_BIT_BINDER), true)
-        $(error When PRODUCT_SHIPPING_API_LEVEL >= 28, TARGET_USES_64_BIT_BINDER must be true)
-      endif
-    endif
-  endif
   ifneq ($(call math_gt_or_eq,$(PRODUCT_SHIPPING_API_LEVEL),29),)
     ifneq ($(BOARD_OTA_FRAMEWORK_VBMETA_VERSION_OVERRIDE),)
       $(error When PRODUCT_SHIPPING_API_LEVEL >= 29, BOARD_OTA_FRAMEWORK_VBMETA_VERSION_OVERRIDE cannot be set)
@@ -752,50 +858,42 @@ ifdef PRODUCT_MAINLINE_SEPOLICY_DEV_CERTIFICATES
 else
   MAINLINE_SEPOLICY_DEV_CERTIFICATES := $(dir $(DEFAULT_SYSTEM_DEV_CERTIFICATE))
 endif
+.KATI_READONLY := MAINLINE_SEPOLICY_DEV_CERTIFICATES
 
 BUILD_NUMBER_FROM_FILE := $$(cat $(SOONG_OUT_DIR)/build_number.txt)
+BUILD_HOSTNAME_FROM_FILE := $$(cat $(SOONG_OUT_DIR)/build_hostname.txt)
 BUILD_DATETIME_FROM_FILE := $$(cat $(BUILD_DATETIME_FILE))
 
 # SEPolicy versions
 
-# PLATFORM_SEPOLICY_VERSION is a number of the form "NN.m" with "NN" mapping to
-# PLATFORM_SDK_VERSION and "m" as a minor number which allows for SELinux
-# changes independent of PLATFORM_SDK_VERSION.  This value will be set to
-# 10000.0 to represent tip-of-tree development that is inherently unstable and
-# thus designed not to work with any shipping vendor policy.  This is similar in
-# spirit to how DEFAULT_APP_TARGET_SDK is set.
-# The minor version ('m' component) must be updated every time a platform release
-# is made which breaks compatibility with the previous platform sepolicy version,
-# not just on every increase in PLATFORM_SDK_VERSION.  The minor version should
-# be reset to 0 on every bump of the PLATFORM_SDK_VERSION.
-sepolicy_major_vers := 30
-sepolicy_minor_vers := 0
-
-ifneq ($(sepolicy_major_vers), $(PLATFORM_SDK_VERSION))
-$(error sepolicy_major_version does not match PLATFORM_SDK_VERSION, please update.)
-endif
-
-TOT_SEPOLICY_VERSION := 10000.0
-ifneq (REL,$(PLATFORM_VERSION_CODENAME))
-    PLATFORM_SEPOLICY_VERSION := $(TOT_SEPOLICY_VERSION)
-else
-    PLATFORM_SEPOLICY_VERSION := $(join $(addsuffix .,$(sepolicy_major_vers)), $(sepolicy_minor_vers))
-endif
-sepolicy_major_vers :=
-sepolicy_minor_vers :=
+# PLATFORM_SEPOLICY_VERSION is a number of the form "YYYYMM" with "YYYYMM"
+# mapping to vFRC version.
+PLATFORM_SEPOLICY_VERSION := $(BOARD_API_LEVEL)
+BOARD_SEPOLICY_VERS := $(PLATFORM_SEPOLICY_VERSION)
+.KATI_READONLY := PLATFORM_SEPOLICY_VERSION BOARD_SEPOLICY_VERS
 
 # A list of SEPolicy versions, besides PLATFORM_SEPOLICY_VERSION, that the framework supports.
 PLATFORM_SEPOLICY_COMPAT_VERSIONS := \
-    26.0 \
-    27.0 \
-    28.0 \
     29.0 \
     30.0 \
+    31.0 \
+    32.0 \
+    33.0 \
+    34.0 \
+
+PLATFORM_SEPOLICY_COMPAT_VERSIONS += $(foreach ver,\
+    202404 \
+    202504 \
+    ,$(if $(filter true,$(call math_gt,$(PLATFORM_SEPOLICY_VERSION),$(ver))),$(ver)))
 
 .KATI_READONLY := \
     PLATFORM_SEPOLICY_COMPAT_VERSIONS \
     PLATFORM_SEPOLICY_VERSION \
-    TOT_SEPOLICY_VERSION \
+
+BOARD_GENFS_LABELS_VERSION ?= $(BOARD_API_LEVEL)
+ifeq ($(call math_gt,$(BOARD_API_LEVEL),$(BOARD_GENFS_LABELS_VERSION)),true)
+  $(error BOARD_GENFS_LABELS_VERSION ($(BOARD_GENFS_LABELS_VERSION)) must be greater than or equal to BOARD_API_LEVEL ($(BOARD_API_LEVEL)))
+endif
 
 ifeq ($(PRODUCT_RETROFIT_DYNAMIC_PARTITIONS),true)
   ifneq ($(PRODUCT_USE_DYNAMIC_PARTITIONS),true)
@@ -811,9 +909,6 @@ ifeq ($(PRODUCT_RETROFIT_DYNAMIC_PARTITIONS),true)
 endif
 
 ifeq ($(PRODUCT_USE_DYNAMIC_PARTITIONS),true)
-    ifeq ($(BOARD_BUILD_SYSTEM_ROOT_IMAGE),true)
-        $(error BOARD_BUILD_SYSTEM_ROOT_IMAGE cannot be true for devices with dynamic partitions)
-    endif
     ifneq ($(PRODUCT_USE_DYNAMIC_PARTITION_SIZE),true)
         $(error PRODUCT_USE_DYNAMIC_PARTITION_SIZE must be true for devices with dynamic partitions)
     endif
@@ -863,6 +958,13 @@ $(error Should not define BOARD_ODM_DLKMIMAGE_PARTITION_SIZE and \
 endif
 endif
 
+ifneq ($(BOARD_SYSTEM_DLKMIMAGE_PARTITION_SIZE),)
+ifneq ($(BOARD_SYSTEM_DLKMIMAGE_PARTITION_RESERVED_SIZE),)
+$(error Should not define BOARD_SYSTEM_DLKMIMAGE_PARTITION_SIZE and \
+    BOARD_SYSTEM_DLKMIMAGE_PARTITION_RESERVED_SIZE together)
+endif
+endif
+
 ifneq ($(BOARD_PRODUCTIMAGE_PARTITION_SIZE),)
 ifneq ($(BOARD_PRODUCTIMAGE_PARTITION_RESERVED_SIZE),)
 $(error Should not define BOARD_PRODUCTIMAGE_PARTITION_SIZE and \
@@ -896,16 +998,6 @@ $(foreach group,$(call to-upper,$(BOARD_SUPER_PARTITION_GROUPS)), \
     $(eval BOARD_$(group)_PARTITION_LIST ?=) \
     $(eval .KATI_READONLY := BOARD_$(group)_PARTITION_LIST) \
 )
-
-# BOARD_*_PARTITION_LIST: a list of the following tokens
-valid_super_partition_list := system vendor product system_ext odm vendor_dlkm odm_dlkm
-$(foreach group,$(call to-upper,$(BOARD_SUPER_PARTITION_GROUPS)), \
-    $(if $(filter-out $(valid_super_partition_list),$(BOARD_$(group)_PARTITION_LIST)), \
-        $(error BOARD_$(group)_PARTITION_LIST contains invalid partition name \
-            $(filter-out $(valid_super_partition_list),$(BOARD_$(group)_PARTITION_LIST)). \
-            Valid names are $(valid_super_partition_list))))
-valid_super_partition_list :=
-
 
 # Define BOARD_SUPER_PARTITION_PARTITION_LIST, the sum of all BOARD_*_PARTITION_LIST
 ifdef BOARD_SUPER_PARTITION_PARTITION_LIST
@@ -989,6 +1081,13 @@ $(foreach device,$(call to-upper,$(BOARD_SUPER_PARTITION_BLOCK_DEVICES)), \
     $(eval .KATI_READONLY := BOARD_SUPER_PARTITION_$(device)_DEVICE_SIZE))
 
 endif # PRODUCT_USE_DYNAMIC_PARTITIONS
+
+# By default, we build the hidden API csv files from source. You can use
+# prebuilt hiddenapi files by setting BOARD_PREBUILT_HIDDENAPI_DIR to the name
+# of a directory containing both prebuilt hiddenapi-flags.csv and
+# hiddenapi-index.csv.
+BOARD_PREBUILT_HIDDENAPI_DIR ?=
+.KATI_READONLY := BOARD_PREBUILT_HIDDENAPI_DIR
 
 # ###############################################################
 # Set up final options.
@@ -1075,23 +1174,20 @@ endef
 # This produces a list like "current/core current/public current/system 4/public"
 TARGET_AVAILABLE_SDK_VERSIONS := $(wildcard $(HISTORICAL_SDK_VERSIONS_ROOT)/*/*/android.jar)
 TARGET_AVAILABLE_SDK_VERSIONS := $(patsubst $(HISTORICAL_SDK_VERSIONS_ROOT)/%/android.jar,%,$(TARGET_AVAILABLE_SDK_VERSIONS))
-# Strips and reorganizes the "public", "core" and "system" subdirs.
+# Strips and reorganizes the "public", "core", "system" and "test" subdirs.
 TARGET_AVAILABLE_SDK_VERSIONS := $(subst /public,,$(TARGET_AVAILABLE_SDK_VERSIONS))
 TARGET_AVAILABLE_SDK_VERSIONS := $(patsubst %/core,core_%,$(TARGET_AVAILABLE_SDK_VERSIONS))
 TARGET_AVAILABLE_SDK_VERSIONS := $(patsubst %/system,system_%,$(TARGET_AVAILABLE_SDK_VERSIONS))
-# No prebuilt for test_current.
-TARGET_AVAILABLE_SDK_VERSIONS += test_current
+TARGET_AVAILABLE_SDK_VERSIONS := $(patsubst %/test,test_%,$(TARGET_AVAILABLE_SDK_VERSIONS))
+# module-lib and system-server are not supported in Make.
+TARGET_AVAILABLE_SDK_VERSIONS := $(filter-out %/module-lib %/system-server,$(TARGET_AVAILABLE_SDK_VERSIONS))
 TARGET_AVAIALBLE_SDK_VERSIONS := $(call numerically_sort,$(TARGET_AVAILABLE_SDK_VERSIONS))
 
-TARGET_SDK_VERSIONS_WITHOUT_JAVA_18_SUPPORT := $(call numbers_less_than,24,$(TARGET_AVAILABLE_SDK_VERSIONS))
-TARGET_SDK_VERSIONS_WITHOUT_JAVA_19_SUPPORT := $(call numbers_less_than,30,$(TARGET_AVAILABLE_SDK_VERSIONS))
+TARGET_SDK_VERSIONS_WITHOUT_JAVA_1_9_SUPPORT := $(call numbers_less_than,30,$(TARGET_AVAILABLE_SDK_VERSIONS))
+TARGET_SDK_VERSIONS_WITHOUT_JAVA_11_SUPPORT := $(call numbers_less_than,32,$(TARGET_AVAILABLE_SDK_VERSIONS))
+TARGET_SDK_VERSIONS_WITHOUT_JAVA_17_SUPPORT := $(call numbers_less_than,34,$(TARGET_AVAILABLE_SDK_VERSIONS))
 
-# Missing optional uses-libraries so that the platform doesn't create build rules that depend on
-# them.
-INTERNAL_PLATFORM_MISSING_USES_LIBRARIES := \
-  com.google.android.ble \
-  com.google.android.media.effects \
-  com.google.android.wearable \
+JAVA_LANGUAGE_VERSIONS_WITHOUT_SYSTEM_MODULES := 1.7 1.8
 
 # This is the standard way to name a directory containing prebuilt target
 # objects. E.g., prebuilt/$(TARGET_PREBUILT_TAG)/libc.so
@@ -1109,15 +1205,11 @@ RS_PREBUILT_COMPILER_RT := prebuilts/sdk/renderscript/lib/$(TARGET_ARCH)/libcomp
 RSCOMPAT_32BIT_ONLY_API_LEVELS := 8 9 10 11 12 13 14 15 16 17 18 19 20
 RSCOMPAT_NO_USAGEIO_API_LEVELS := 8 9 10 11 12 13
 
-# Add BUILD_NUMBER to apps default version name if it's unbundled build.
-ifdef TARGET_BUILD_APPS
-TARGET_BUILD_WITH_APPS_VERSION_NAME := true
-endif
-
-ifdef TARGET_BUILD_WITH_APPS_VERSION_NAME
-APPS_DEFAULT_VERSION_NAME := $(PLATFORM_VERSION)-$(BUILD_NUMBER_FROM_FILE)
-else
 APPS_DEFAULT_VERSION_NAME := $(PLATFORM_VERSION)
+
+# Add BUILD_NUMBER to apps if PRODUCT_BUILD_APPS_WITH_BUILD_NUMBER is defined.
+ifeq ($(PRODUCT_BUILD_APPS_WITH_BUILD_NUMBER),true)
+  APPS_DEFAULT_VERSION_NAME := $(PLATFORM_VERSION)-$(BUILD_NUMBER_FROM_FILE)
 endif
 
 # ANDROID_WARNING_ALLOWED_PROJECTS is generated by build/soong.
@@ -1140,23 +1232,143 @@ else ifneq (,$(filter-out false,$(USE_RBE)))
 endif
 .KATI_READONLY := GOMA_POOL RBE_POOL GOMA_OR_RBE_POOL
 
+JAVAC_NINJA_POOL :=
+R8_NINJA_POOL :=
+D8_NINJA_POOL :=
+
+ifneq ($(filter-out false,$(USE_RBE)),)
+  ifdef RBE_JAVAC
+    JAVAC_NINJA_POOL := $(RBE_POOL)
+  endif
+  ifdef RBE_R8
+    R8_NINJA_POOL := $(RBE_POOL)
+  endif
+  ifdef RBE_D8
+    D8_NINJA_POOL := $(RBE_POOL)
+  endif
+endif
+
+.KATI_READONLY := JAVAC_NINJA_POOL R8_NINJA_POOL D8_NINJA_POOL
+
+# Soong modules that are known to have broken optional_uses_libs dependencies.
+BUILD_WARNING_BAD_OPTIONAL_USES_LIBS_ALLOWLIST := LegacyCamera Gallery2
+
 # These goals don't need to collect and include Android.mks/CleanSpec.mks
 # in the source tree.
-dont_bother_goals := out \
-    product-graph dump-products
+dont_bother_goals := out product-graph
+
+ifeq ($(TARGET_SYSTEM_PROP),)
+TARGET_SYSTEM_PROP := $(wildcard $(TARGET_DEVICE_DIR)/system.prop)
+endif
+
+ifeq ($(TARGET_SYSTEM_EXT_PROP),)
+TARGET_SYSTEM_EXT_PROP := $(wildcard $(TARGET_DEVICE_DIR)/system_ext.prop)
+endif
+
+ifeq ($(TARGET_PRODUCT_PROP),)
+TARGET_PRODUCT_PROP := $(wildcard $(TARGET_DEVICE_DIR)/product.prop)
+endif
+
+ifeq ($(TARGET_ODM_PROP),)
+TARGET_ODM_PROP := $(wildcard $(TARGET_DEVICE_DIR)/odm.prop)
+endif
+
+.KATI_READONLY := \
+    TARGET_SYSTEM_PROP \
+    TARGET_SYSTEM_EXT_PROP \
+    TARGET_PRODUCT_PROP \
+    TARGET_ODM_PROP \
+
+include $(BUILD_SYSTEM)/sysprop_config.mk
+
+# Make ANDROID Soong config variables visible to Android.mk files, for
+# consistency with those defined in BoardConfig.mk files.
+include $(BUILD_SYSTEM)/android_soong_config_vars.mk
+
+# EMMA_INSTRUMENT is set to true when coverage is enabled. Creates a suffix to
+# differeciate the coverage version of ninja files. This will save 5 minutes of
+# build time used to regenerate ninja.
+ifeq (true,$(EMMA_INSTRUMENT))
+COVERAGE_SUFFIX := .coverage
+endif
+
+SOONG_VARIABLES := $(SOONG_OUT_DIR)/soong.$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).variables
+SOONG_EXTRA_VARIABLES := $(SOONG_OUT_DIR)/soong.$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).extra.variables
 
 ifeq ($(CALLED_FROM_SETUP),true)
-include $(BUILD_SYSTEM)/android_soong_config_vars.mk
 include $(BUILD_SYSTEM)/ninja_config.mk
 include $(BUILD_SYSTEM)/soong_config.mk
 endif
 
--include external/linux-kselftest/android/kselftest_test_list.mk
--include external/ltp/android/ltp_package_list.mk
-DEFAULT_DATA_OUT_MODULES := ltp $(ltp_packages) $(kselftest_modules)
-.KATI_READONLY := DEFAULT_DATA_OUT_MODULES
-
-# Make RECORD_ALL_DEPS readonly.
-RECORD_ALL_DEPS :=$= $(filter true,$(RECORD_ALL_DEPS))
+SOONG_VARIABLES :=
+SOONG_EXTRA_VARIABLES :=
 
 include $(BUILD_SYSTEM)/dumpvar.mk
+
+ifdef BOARD_VNDK_VERSION
+BOARD_VNDK_VERSION=
+endif
+ifdef PLATFORM_VNDK_VERSION
+PLATFORM_VNDK_VERSION=
+endif
+
+ifeq (true,$(FULL_SYSTEM_OPTIMIZE_JAVA))
+ifeq (false,$(SYSTEM_OPTIMIZE_JAVA))
+$(error SYSTEM_OPTIMIZE_JAVA must be enabled when FULL_SYSTEM_OPTIMIZE_JAVA is enabled)
+endif
+endif
+
+# -----------------------------------------------------------------
+# Define fingerprint, thumbprint, and version tags for the current build
+#
+# BUILD_VERSION_TAGS is a comma-separated list of tags chosen by the device
+# implementer that further distinguishes the build. It's basically defined
+# by the device implementer. Here, we are adding a mandatory tag that
+# identifies the signing config of the build.
+BUILD_VERSION_TAGS := $(BUILD_VERSION_TAGS)
+ifeq ($(TARGET_BUILD_TYPE),debug)
+  BUILD_VERSION_TAGS += debug
+endif
+# The "test-keys" tag marks builds signed with the old test keys,
+# which are available in the SDK.  "dev-keys" marks builds signed with
+# non-default dev keys (usually private keys from a vendor directory).
+# Both of these tags will be removed and replaced with "release-keys"
+# when the target-files is signed in a post-build step.
+ifeq ($(DEFAULT_SYSTEM_DEV_CERTIFICATE),build/make/target/product/security/testkey)
+BUILD_KEYS := test-keys
+else
+BUILD_KEYS := dev-keys
+endif
+BUILD_VERSION_TAGS += $(BUILD_KEYS)
+BUILD_VERSION_TAGS := $(subst $(space),$(comma),$(sort $(BUILD_VERSION_TAGS)))
+
+# BUILD_FINGERPRINT is used used to uniquely identify the combined build and
+# product; used by the OTA server.
+ifeq (,$(strip $(BUILD_FINGERPRINT)))
+  BUILD_FINGERPRINT := $(PRODUCT_BRAND)/$(TARGET_PRODUCT)/$(TARGET_DEVICE):$(PLATFORM_VERSION)/$(BUILD_ID)/$(BUILD_NUMBER_FROM_FILE):$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)
+endif
+
+BUILD_FINGERPRINT_FILE := $(PRODUCT_OUT)/build_fingerprint.txt
+ifneq (,$(shell mkdir -p $(PRODUCT_OUT) && echo $(BUILD_FINGERPRINT) >$(BUILD_FINGERPRINT_FILE).tmp && (if ! cmp -s $(BUILD_FINGERPRINT_FILE).tmp $(BUILD_FINGERPRINT_FILE); then mv $(BUILD_FINGERPRINT_FILE).tmp $(BUILD_FINGERPRINT_FILE); else rm $(BUILD_FINGERPRINT_FILE).tmp; fi) && grep " " $(BUILD_FINGERPRINT_FILE)))
+  $(error BUILD_FINGERPRINT cannot contain spaces: "$(file <$(BUILD_FINGERPRINT_FILE))")
+endif
+BUILD_FINGERPRINT_FROM_FILE := $$(cat $(BUILD_FINGERPRINT_FILE))
+# unset it for safety.
+BUILD_FINGERPRINT :=
+
+# BUILD_THUMBPRINT is used to uniquely identify the system build; used by the
+# OTA server. This purposefully excludes any product-specific variables.
+ifeq (,$(strip $(BUILD_THUMBPRINT)))
+  BUILD_THUMBPRINT := $(PLATFORM_VERSION)/$(BUILD_ID)/$(BUILD_NUMBER_FROM_FILE):$(TARGET_BUILD_VARIANT)/$(BUILD_VERSION_TAGS)
+endif
+
+BUILD_THUMBPRINT_FILE := $(PRODUCT_OUT)/build_thumbprint.txt
+ifeq ($(strip $(HAS_BUILD_NUMBER)),true)
+$(BUILD_THUMBPRINT_FILE): $(BUILD_NUMBER_FILE)
+endif
+ifneq (,$(shell mkdir -p $(PRODUCT_OUT) && echo $(BUILD_THUMBPRINT) >$(BUILD_THUMBPRINT_FILE) && grep " " $(BUILD_THUMBPRINT_FILE)))
+  $(error BUILD_THUMBPRINT cannot contain spaces: "$(file <$(BUILD_THUMBPRINT_FILE))")
+endif
+# unset it for safety.
+BUILD_THUMBPRINT_FILE :=
+BUILD_THUMBPRINT :=

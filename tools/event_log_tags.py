@@ -14,21 +14,21 @@
 
 """A module for reading and parsing event-log-tags files."""
 
+import dataclasses
 import re
 import sys
+from typing import Optional
 
-class Tag(object):
-  __slots__ = ["tagnum", "tagname", "description", "filename", "linenum"]
-
-  def __init__(self, tagnum, tagname, description, filename, linenum):
-    self.tagnum = tagnum
-    self.tagname = tagname
-    self.description = description
-    self.filename = filename
-    self.linenum = linenum
+@dataclasses.dataclass
+class Tag:
+  tagnum: int
+  tagname: str
+  description: Optional[str]
+  filename: str
+  linenum: int
 
 
-class TagFile(object):
+class TagFile:
   """Read an input event-log-tags file."""
   def AddError(self, msg, linenum=None):
     if linenum is None:
@@ -55,12 +55,13 @@ class TagFile(object):
     if file_object is None:
       try:
         file_object = open(filename, "rb")
-      except (IOError, OSError), e:
+      except (IOError, OSError) as e:
         self.AddError(str(e))
         return
 
     try:
       for self.linenum, line in enumerate(file_object):
+        line = line.decode('utf-8')
         self.linenum += 1
         line = re.sub('#.*$', '', line) # strip trailing comments
         line = line.strip()
@@ -75,14 +76,11 @@ class TagFile(object):
           self.options[parts[1]] = parts[2:]
           continue
 
-        if parts[0] == "?":
-          tag = None
-        else:
-          try:
-            tag = int(parts[0])
-          except ValueError:
-            self.AddError("\"%s\" isn't an integer tag or '?'" % (parts[0],))
-            continue
+        try:
+          tag = int(parts[0])
+        except ValueError:
+          self.AddError("\"%s\" isn't an integer tag" % (parts[0],))
+          continue
 
         tagname = parts[1]
         if len(parts) == 3:
@@ -100,7 +98,7 @@ class TagFile(object):
 
         self.tags.append(Tag(tag, tagname, description,
                              self.filename, self.linenum))
-    except (IOError, OSError), e:
+    except (IOError, OSError) as e:
       self.AddError(str(e))
 
 
@@ -127,9 +125,9 @@ def WriteOutput(output_file, data):
       out = sys.stdout
       output_file = "<stdout>"
     else:
-      out = open(output_file, "wb")
+      out = open(output_file, "w")
     out.write(data)
     out.close()
-  except (IOError, OSError), e:
-    print >> sys.stderr, "failed to write %s: %s" % (output_file, e)
+  except (IOError, OSError) as e:
+    print("failed to write %s: %s" % (output_file, e), file=sys.stderr)
     sys.exit(1)

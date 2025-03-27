@@ -17,7 +17,7 @@
 # Base modules and settings for recovery.
 PRODUCT_PACKAGES += \
     adbd.recovery \
-    android.hardware.health@2.0-impl-default.recovery \
+    build_flag_vendor \
     cgroups.recovery.json \
     charger.recovery \
     init_second_stage.recovery \
@@ -25,8 +25,14 @@ PRODUCT_PACKAGES += \
     linker.recovery \
     otacerts.recovery \
     recovery \
+    servicemanager.recovery \
     shell_and_utilities_recovery \
     watchdogd.recovery \
+
+PRODUCT_VENDOR_PROPERTIES += \
+    ro.recovery.usb.vid?=18D1 \
+    ro.recovery.usb.adb.pid?=D001 \
+    ro.recovery.usb.fastboot.pid?=4EE0 \
 
 # These had been pulled in via init_second_stage.recovery, but may not be needed.
 PRODUCT_HOST_PACKAGES += \
@@ -40,8 +46,7 @@ PRODUCT_HOST_PACKAGES += \
 
 # Base modules and settings for the vendor partition.
 PRODUCT_PACKAGES += \
-    android.hardware.cas@1.2-service \
-    android.hardware.media.omx@1.0-service \
+    com.android.hardware.cas \
     boringssl_self_test_vendor \
     dumpsys_vendor \
     fs_config_files_nonsystem \
@@ -57,6 +62,7 @@ PRODUCT_PACKAGES += \
     libdynproc \
     libeffectproxy \
     libeffects \
+    libhapticgenerator \
     libldnhncr \
     libreference-ril \
     libreverbwrapper \
@@ -65,9 +71,33 @@ PRODUCT_PACKAGES += \
     passwd_odm \
     passwd_vendor \
     selinux_policy_nonsystem \
+    selinux_policy_vendor \
+    selinux_policy_odm \
     shell_and_utilities_vendor \
+    odm-build.prop \
 
-# Base module when shipping api level is less than or equal to 29
+# libhealthloop BPF filter. This is in base_vendor.mk because libhealthloop must
+# be a static library and because the Android build system ignores 'required'
+# sections for static libraries.
+PRODUCT_PACKAGES += filterPowerSupplyEvents.o
+
+# Base modules when shipping api level is less than or equal to 34
+PRODUCT_PACKAGES_SHIPPING_API_LEVEL_34 += \
+     android.hidl.memory@1.0-impl.vendor \
+
+# OMX not supported for 64bit_only builds
+# Only supported when SHIPPING_API_LEVEL is less than or equal to 33
+ifneq ($(TARGET_SUPPORTS_OMX_SERVICE),false)
+    PRODUCT_PACKAGES_SHIPPING_API_LEVEL_33 += \
+        android.hardware.media.omx@1.0-service \
+
+endif
+
+# Base modules when shipping api level is less than or equal to 33
+PRODUCT_PACKAGES_SHIPPING_API_LEVEL_33 += \
+    android.hardware.cas@1.2-service \
+
+# Base modules when shipping api level is less than or equal to 29
 PRODUCT_PACKAGES_SHIPPING_API_LEVEL_29 += \
     android.hardware.configstore@1.1-service \
     vndservice \
@@ -77,7 +107,14 @@ PRODUCT_PACKAGES_SHIPPING_API_LEVEL_29 += \
 PRODUCT_PACKAGES += \
     vendor_compatibility_matrix.xml \
 
-# Packages to update the recovery partition, which will be installed on
-# /vendor. TODO(b/141648565): Don't install these unless they're needed.
+# Base modules and settings for the debug ramdisk, which is then packed
+# into a boot-debug.img and a vendor_boot-debug.img.
 PRODUCT_PACKAGES += \
-    applypatch
+    adb_debug.prop \
+    userdebug_plat_sepolicy.cil
+
+# On eng or userdebug builds, build in perf-setup-sh by default.
+ifneq (,$(filter userdebug eng,$(TARGET_BUILD_VARIANT)))
+PRODUCT_PACKAGES += \
+    perf-setup-sh
+endif

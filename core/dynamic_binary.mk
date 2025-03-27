@@ -25,13 +25,8 @@ intermediates := $(call local-intermediates-dir,,$(LOCAL_2ND_ARCH_VAR_PREFIX))
 # The includer of this file will define a rule to build this target.
 linked_module := $(intermediates)/LINKED/$(notdir $(my_installed_module_stem))
 
-ALL_ORIGINAL_DYNAMIC_BINARIES += $(linked_module)
-
-# Because TARGET_SYMBOL_FILTER_FILE depends on ALL_ORIGINAL_DYNAMIC_BINARIES,
-# the linked_module rules won't necessarily inherit the PRIVATE_
-# variables from LOCAL_BUILT_MODULE.  This tells binary.make to explicitly
-# define the PRIVATE_ variables for linked_module as well as for
-# LOCAL_BUILT_MODULE.
+# This tells binary.make to explicitly define the PRIVATE_ variables for
+# linked_module as well as for LOCAL_BUILT_MODULE.
 LOCAL_INTERMEDIATE_TARGETS := $(linked_module)
 
 ###################################
@@ -60,9 +55,12 @@ my_unstripped_path := $(LOCAL_UNSTRIPPED_PATH)
 endif
 symbolic_input := $(inject_module)
 symbolic_output := $(my_unstripped_path)/$(my_installed_module_stem)
-$(symbolic_output) : $(symbolic_input)
-	@echo "target Symbolic: $(PRIVATE_MODULE) ($@)"
-	$(copy-file-to-target)
+elf_mapping_path := $(patsubst $(TARGET_OUT_UNSTRIPPED)/%,$(call intermediates-dir-for,PACKAGING,elf_symbol_mapping)/%,$(symbolic_output).textproto)
+
+ALL_MODULES.$(my_register_name).SYMBOLIC_OUTPUT_PATH := $(symbolic_output)
+ALL_MODULES.$(my_register_name).ELF_SYMBOL_MAPPING_PATH := $(elf_mapping_path)
+
+$(eval $(call copy-unstripped-elf-file-with-mapping,$(symbolic_input),$(symbolic_output),$(elf_mapping_path)))
 
 ###########################################################
 ## Store breakpad symbols
@@ -87,8 +85,13 @@ endif
 ###########################################################
 ## Strip
 ###########################################################
-strip_input := $(symbolic_output)
+strip_input := $(inject_module)
 strip_output := $(LOCAL_BUILT_MODULE)
+
+# Use an order-only dependency to ensure the unstripped file in the symbols
+# directory is copied when the module is built, but does not force the
+# module to be rebuilt when the symbols directory is cleaned by installclean.
+$(strip_output): | $(symbolic_output)
 
 my_strip_module := $(firstword \
   $(LOCAL_STRIP_MODULE_$($(my_prefix)$(LOCAL_2ND_ARCH_VAR_PREFIX)ARCH)) \
@@ -127,12 +130,16 @@ endif
 ifneq (,$(my_strip_module))
   $(strip_output): PRIVATE_STRIP_ARGS := $(my_strip_args)
   $(strip_output): PRIVATE_TOOLS_PREFIX := $($(LOCAL_2ND_ARCH_VAR_PREFIX)$(my_prefix)TOOLS_PREFIX)
-  $(strip_output): $(strip_input) $(SOONG_STRIP_PATH)
+  $(strip_output): $(strip_input) $(SOONG_STRIP_PATH) $(XZ)
 	@echo "$($(PRIVATE_PREFIX)DISPLAY) Strip: $(PRIVATE_MODULE) ($@)"
 	CLANG_BIN=$(LLVM_PREBUILTS_PATH) \
 	CROSS_COMPILE=$(PRIVATE_TOOLS_PREFIX) \
 	XZ=$(XZ) \
+	CREATE_MINIDEBUGINFO=${CREATE_MINIDEBUGINFO} \
 	$(SOONG_STRIP_PATH) -i $< -o $@ -d $@.strip.d $(PRIVATE_STRIP_ARGS)
+  ifneq ($(HOST_OS),darwin)
+    $(strip_output): $(CREATE_MINIDEBUGINFO)
+  endif
   $(call include-depfile,$(strip_output).strip.d,$(strip_output))
 else
   # Don't strip the binary, just copy it.  We can't skip this step

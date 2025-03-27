@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright (C) 2009 The Android Open Source Project
 #
@@ -15,22 +15,13 @@
 # limitations under the License.
 
 """
-Usage: merge-event-log-tags.py [-o output_file] [input_files...]
-
 Merge together zero or more event-logs-tags files to produce a single
 output file, stripped of comments.  Checks that no tag numbers conflict
 and fails if they do.
-
--h to display this usage message and exit.
 """
 
-import cStringIO
-import getopt
-try:
-  import hashlib
-except ImportError:
-  import md5 as hashlib
-import struct
+from io import StringIO
+import argparse
 import sys
 
 import event_log_tags
@@ -38,32 +29,10 @@ import event_log_tags
 errors = []
 warnings = []
 
-output_file = None
-pre_merged_file = None
-
-# Tags with a tag number of ? are assigned a tag in the range
-# [ASSIGN_START, ASSIGN_LIMIT).
-ASSIGN_START = 900000
-ASSIGN_LIMIT = 1000000
-
-try:
-  opts, args = getopt.getopt(sys.argv[1:], "ho:m:")
-except getopt.GetoptError, err:
-  print str(err)
-  print __doc__
-  sys.exit(2)
-
-for o, a in opts:
-  if o == "-h":
-    print __doc__
-    sys.exit(2)
-  elif o == "-o":
-    output_file = a
-  elif o == "-m":
-    pre_merged_file = a
-  else:
-    print >> sys.stderr, "unhandled option %s" % (o,)
-    sys.exit(1)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('-o', dest='output_file')
+parser.add_argument('files', nargs='*')
+args = parser.parse_args()
 
 # Restrictions on tags:
 #
@@ -77,12 +46,7 @@ for o, a in opts:
 by_tagname = {}
 by_tagnum = {}
 
-pre_merged_tags = {}
-if pre_merged_file:
-  for t in event_log_tags.TagFile(pre_merged_file).tags:
-    pre_merged_tags[t.tagname] = t
-
-for fn in args:
+for fn in args.files:
   tagfile = event_log_tags.TagFile(fn)
 
   for t in tagfile.tags:
@@ -92,12 +56,6 @@ for fn in args:
 
     if t.tagname in by_tagname:
       orig = by_tagname[t.tagname]
-
-      # Allow an explicit tag number to define an implicit tag number
-      if orig.tagnum is None:
-        orig.tagnum = t.tagnum
-      elif t.tagnum is None:
-        t.tagnum = orig.tagnum
 
       if (t.tagnum == orig.tagnum and
           t.description == orig.description):
@@ -114,7 +72,7 @@ for fn in args:
             linenum=t.linenum)
       continue
 
-    if t.tagnum is not None and t.tagnum in by_tagnum:
+    if t.tagnum in by_tagnum:
       orig = by_tagnum[t.tagnum]
 
       if t.tagname != orig.tagname:
@@ -125,60 +83,27 @@ for fn in args:
         continue
 
     by_tagname[t.tagname] = t
-    if t.tagnum is not None:
-      by_tagnum[t.tagnum] = t
+    by_tagnum[t.tagnum] = t
 
   errors.extend(tagfile.errors)
   warnings.extend(tagfile.warnings)
 
 if errors:
   for fn, ln, msg in errors:
-    print >> sys.stderr, "%s:%d: error: %s" % (fn, ln, msg)
+    print("%s:%d: error: %s" % (fn, ln, msg), file=sys.stderr)
   sys.exit(1)
 
 if warnings:
   for fn, ln, msg in warnings:
-    print >> sys.stderr, "%s:%d: warning: %s" % (fn, ln, msg)
-
-# Python's hash function (a) isn't great and (b) varies between
-# versions of python.  Using md5 is overkill here but is the same from
-# platform to platform and speed shouldn't matter in practice.
-def hashname(str):
-  d = hashlib.md5(str).digest()[:4]
-  return struct.unpack("!I", d)[0]
-
-# Assign a tag number to all the entries that say they want one
-# assigned.  We do this based on a hash of the tag name so that the
-# numbers should stay relatively stable as tags are added.
-
-# If we were provided pre-merged tags (w/ the -m option), then don't
-# ever try to allocate one, just fail if we don't have a number
-
-for name, t in sorted(by_tagname.iteritems()):
-  if t.tagnum is None:
-    if pre_merged_tags:
-      try:
-        t.tagnum = pre_merged_tags[t.tagname]
-      except KeyError:
-        print >> sys.stderr, ("Error: Tag number not defined for tag `%s'."
-            +" Have you done a full build?") % t.tagname
-        sys.exit(1)
-    else:
-      while True:
-        x = (hashname(name) % (ASSIGN_LIMIT - ASSIGN_START - 1)) + ASSIGN_START
-        if x not in by_tagnum:
-          t.tagnum = x
-          by_tagnum[x] = t
-          break
-        name = "_" + name
+    print("%s:%d: warning: %s" % (fn, ln, msg), file=sys.stderr)
 
 # by_tagnum should be complete now; we've assigned numbers to all tags.
 
-buffer = cStringIO.StringIO()
-for n, t in sorted(by_tagnum.iteritems()):
+buffer = StringIO()
+for n, t in sorted(by_tagnum.items()):
   if t.description:
     buffer.write("%d %s %s\n" % (t.tagnum, t.tagname, t.description))
   else:
     buffer.write("%d %s\n" % (t.tagnum, t.tagname))
 
-event_log_tags.WriteOutput(output_file, buffer)
+event_log_tags.WriteOutput(args.output_file, buffer)

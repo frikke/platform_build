@@ -7,12 +7,13 @@
 # LOCAL_SOONG_HEADER_JAR
 # LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR
 # LOCAL_SOONG_PROGUARD_DICT
-# LOCAL_SOONG_PROGUARD_USAGE
+# LOCAL_SOONG_PROGUARD_USAGE_ZIP
 # LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE
 # LOCAL_SOONG_RRO_DIRS
 # LOCAL_SOONG_JNI_LIBS_$(TARGET_ARCH)
 # LOCAL_SOONG_JNI_LIBS_$(TARGET_2ND_ARCH)
 # LOCAL_SOONG_JNI_LIBS_SYMBOLS
+# LOCAL_SOONG_DEXPREOPT_CONFIG
 
 ifneq ($(LOCAL_MODULE_MAKEFILE),$(SOONG_ANDROID_MK))
   $(call pretty-error,soong_app_prebuilt.mk may only be used from Soong)
@@ -26,6 +27,7 @@ intermediates.COMMON := $(call local-intermediates-dir,COMMON)
 full_classes_jar := $(intermediates.COMMON)/classes.jar
 full_classes_pre_proguard_jar := $(intermediates.COMMON)/classes-pre-proguard.jar
 full_classes_header_jar := $(intermediates.COMMON)/classes-header.jar
+
 
 #######################################
 include $(BUILD_SYSTEM)/base_rules.mk
@@ -49,13 +51,23 @@ ifdef LOCAL_SOONG_CLASSES_JAR
   .PHONY: javac-check-$(LOCAL_MODULE)
 endif
 
+ifdef LOCAL_SOONG_DEXPREOPT_CONFIG
+  my_dexpreopt_config := $(PRODUCT_OUT)/dexpreopt_config/$(LOCAL_MODULE)_dexpreopt.config
+  $(eval $(call copy-one-file,$(LOCAL_SOONG_DEXPREOPT_CONFIG), $(my_dexpreopt_config)))
+  $(LOCAL_BUILT_MODULE): $(my_dexpreopt_config)
+endif
+
+
+
 # Run veridex on product, system_ext and vendor modules.
 # We skip it for unbundled app builds where we cannot build veridex.
 module_run_appcompat :=
 ifeq (true,$(non_system_module))
-ifeq (,$(TARGET_BUILD_APPS))  # ! unbundled app build
+ifeq (,$(TARGET_BUILD_APPS))  # not unbundled app build
+ifeq (,$(filter sdk,$(MAKECMDGOALS))) # not sdk build (which is another form of unbundled build)
 ifneq ($(UNSAFE_DISABLE_HIDDENAPI_FLAGS),true)
   module_run_appcompat := true
+endif
 endif
 endif
 endif
@@ -74,23 +86,30 @@ endif
 
 ifdef LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR
   $(eval $(call copy-one-file,$(LOCAL_SOONG_JACOCO_REPORT_CLASSES_JAR),\
-    $(intermediates.COMMON)/jacoco-report-classes.jar))
+    $(call local-packaging-dir,jacoco)/jacoco-report-classes.jar))
   $(call add-dependency,$(LOCAL_BUILT_MODULE),\
-    $(intermediates.COMMON)/jacoco-report-classes.jar)
+    $(call local-packaging-dir,jacoco)/jacoco-report-classes.jar)
 endif
 
 ifdef LOCAL_SOONG_PROGUARD_DICT
-  $(eval $(call copy-one-file,$(LOCAL_SOONG_PROGUARD_DICT),\
-    $(intermediates.COMMON)/proguard_dictionary))
-  $(call add-dependency,$(LOCAL_BUILT_MODULE),\
-    $(intermediates.COMMON)/proguard_dictionary)
+  $(eval $(call copy-r8-dictionary-file-with-mapping,\
+    $(LOCAL_SOONG_PROGUARD_DICT),\
+    $(intermediates.COMMON)/proguard_dictionary,\
+    $(intermediates.COMMON)/proguard_dictionary.textproto))
+
+  ALL_MODULES.$(my_register_name).PROGUARD_DICTIONARY_FILES := \
+    $(intermediates.COMMON)/proguard_dictionary \
+    $(LOCAL_SOONG_CLASSES_JAR)
+  ALL_MODULES.$(my_register_name).PROGUARD_DICTIONARY_SOONG_ZIP_ARGUMENTS := \
+    -e out/target/common/obj/$(LOCAL_MODULE_CLASS)/$(LOCAL_MODULE)_intermediates/proguard_dictionary \
+    -f $(intermediates.COMMON)/proguard_dictionary \
+    -e out/target/common/obj/$(LOCAL_MODULE_CLASS)/$(LOCAL_MODULE)_intermediates/classes.jar \
+    -f $(LOCAL_SOONG_CLASSES_JAR)
+  ALL_MODULES.$(my_register_name).PROGUARD_DICTIONARY_MAPPING := $(intermediates.COMMON)/proguard_dictionary.textproto
 endif
 
 ifdef LOCAL_SOONG_PROGUARD_USAGE_ZIP
-  $(eval $(call copy-one-file,$(LOCAL_SOONG_PROGUARD_USAGE_ZIP),\
-    $(intermediates.COMMON)/proguard_usage.zip))
-  $(call add-dependency,$(LOCAL_BUILT_MODULE),\
-    $(intermediates.COMMON)/proguard_usage.zip)
+  ALL_MODULES.$(my_register_name).PROGUARD_USAGE_ZIP := $(LOCAL_SOONG_PROGUARD_USAGE_ZIP)
 endif
 
 ifdef LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE
@@ -110,13 +129,6 @@ endif # LOCAL_SOONG_RESOURCE_EXPORT_PACKAGE
 java-dex: $(LOCAL_SOONG_DEX_JAR)
 
 
-my_built_installed := $(foreach f,$(LOCAL_SOONG_BUILT_INSTALLED),\
-  $(call word-colon,1,$(f)):$(PRODUCT_OUT)$(call word-colon,2,$(f)))
-my_installed := $(call copy-many-files, $(my_built_installed))
-ALL_MODULES.$(my_register_name).INSTALLED += $(my_installed)
-ALL_MODULES.$(my_register_name).BUILT_INSTALLED += $(my_built_installed)
-$(my_all_targets): $(my_installed)
-
 # Copy test suite files.
 ifdef LOCAL_COMPATIBILITY_SUITE
 my_apks_to_install := $(foreach f,$(filter %.apk %.idsig,$(LOCAL_SOONG_BUILT_INSTALLED)),$(call word-colon,1,$(f)))
@@ -130,27 +142,46 @@ endif
 # install symbol files of JNI libraries
 my_jni_lib_symbols_copy_files := $(foreach f,$(LOCAL_SOONG_JNI_LIBS_SYMBOLS),\
   $(call word-colon,1,$(f)):$(patsubst $(PRODUCT_OUT)/%,$(TARGET_OUT_UNSTRIPPED)/%,$(call word-colon,2,$(f))))
-$(LOCAL_BUILT_MODULE): $(call copy-many-files, $(my_jni_lib_symbols_copy_files))
+
+$(foreach f, $(my_jni_lib_symbols_copy_files), \
+  $(eval $(call copy-unstripped-elf-file-with-mapping, \
+    $(call word-colon,1,$(f)), \
+    $(call word-colon,2,$(f)), \
+    $(patsubst $(TARGET_OUT_UNSTRIPPED)/%,$(call intermediates-dir-for,PACKAGING,elf_symbol_mapping)/%,$(call word-colon,2,$(f)).textproto)\
+  ))\
+)
+
+symbolic_outputs := $(foreach f,$(my_jni_lib_symbols_copy_files),$(call word-colon,2,$(f)))
+symbolic_mappings := $(foreach f,$(symbolic_outputs),$(patsubst $(TARGET_OUT_UNSTRIPPED)/%,$(call intermediates-dir-for,PACKAGING,elf_symbol_mapping)/%,$(f).textproto))
+ALL_MODULES.$(my_register_name).SYMBOLIC_OUTPUT_PATH := $(symbolic_outputs)
+ALL_MODULES.$(my_register_name).ELF_SYMBOL_MAPPING_PATH := $(symbolic_mappings)
+
+$(LOCAL_BUILT_MODULE): | $(symbolic_outputs)
 
 # embedded JNI will already have been handled by soong
 my_embed_jni :=
 my_prebuilt_jni_libs :=
-ifdef LOCAL_SOONG_JNI_LIBS_$(TARGET_ARCH)
-  my_2nd_arch_prefix :=
-  LOCAL_JNI_SHARED_LIBRARIES := $(LOCAL_SOONG_JNI_LIBS_$(TARGET_ARCH))
-  include $(BUILD_SYSTEM)/install_jni_libs_internal.mk
-endif
-ifdef TARGET_2ND_ARCH
-  ifdef LOCAL_SOONG_JNI_LIBS_$(TARGET_2ND_ARCH)
-    my_2nd_arch_prefix := $(TARGET_2ND_ARCH_VAR_PREFIX)
-    LOCAL_JNI_SHARED_LIBRARIES := $(LOCAL_SOONG_JNI_LIBS_$(TARGET_2ND_ARCH))
+ifneq (true,$(LOCAL_UNINSTALLABLE_MODULE))
+  ifdef LOCAL_SOONG_JNI_LIBS_$(TARGET_ARCH)
+    my_2nd_arch_prefix :=
+    LOCAL_JNI_SHARED_LIBRARIES := $(LOCAL_SOONG_JNI_LIBS_$(TARGET_ARCH))
+    partition_lib_pairs :=  $(LOCAL_SOONG_JNI_LIBS_PARTITION_$(TARGET_ARCH))
     include $(BUILD_SYSTEM)/install_jni_libs_internal.mk
+  endif
+  ifdef TARGET_2ND_ARCH
+    ifdef LOCAL_SOONG_JNI_LIBS_$(TARGET_2ND_ARCH)
+      my_2nd_arch_prefix := $(TARGET_2ND_ARCH_VAR_PREFIX)
+      LOCAL_JNI_SHARED_LIBRARIES := $(LOCAL_SOONG_JNI_LIBS_$(TARGET_2ND_ARCH))
+      partition_lib_pairs :=  $(LOCAL_SOONG_JNI_LIBS_PARTITION_$(TARGET_2ND_ARCH))
+      include $(BUILD_SYSTEM)/install_jni_libs_internal.mk
+    endif
   endif
 endif
 LOCAL_SHARED_JNI_LIBRARIES :=
 my_embed_jni :=
 my_prebuilt_jni_libs :=
 my_2nd_arch_prefix :=
+partition_lib_pairs :=
 
 PACKAGES := $(PACKAGES) $(LOCAL_MODULE)
 ifndef LOCAL_CERTIFICATE
@@ -207,28 +238,6 @@ my_common := COMMON
 include $(BUILD_SYSTEM)/link_type.mk
 endif # !LOCAL_IS_HOST_MODULE
 
-ifdef LOCAL_SOONG_DEVICE_RRO_DIRS
-  $(call append_enforce_rro_sources, \
-      $(my_register_name), \
-      false, \
-      $(LOCAL_FULL_MANIFEST_FILE), \
-      $(if $(LOCAL_EXPORT_PACKAGE_RESOURCES),true,false), \
-      $(LOCAL_SOONG_DEVICE_RRO_DIRS), \
-      vendor \
-  )
-endif
-
-ifdef LOCAL_SOONG_PRODUCT_RRO_DIRS
-  $(call append_enforce_rro_sources, \
-      $(my_register_name), \
-      false, \
-      $(LOCAL_FULL_MANIFEST_FILE), \
-      $(if $(LOCAL_EXPORT_PACKAGE_RESOURCES),true,false), \
-      $(LOCAL_SOONG_PRODUCT_RRO_DIRS), \
-      product \
-  )
-endif
-
 ifdef LOCAL_PREBUILT_COVERAGE_ARCHIVE
   my_coverage_dir := $(TARGET_OUT_COVERAGE)/$(patsubst $(PRODUCT_OUT)/%,%,$(my_module_path))
   my_coverage_copy_pairs := $(foreach f,$(LOCAL_PREBUILT_COVERAGE_ARCHIVE),$(f):$(my_coverage_dir)/$(notdir  $(f)))
@@ -237,3 +246,8 @@ ifdef LOCAL_PREBUILT_COVERAGE_ARCHIVE
 endif
 
 SOONG_ALREADY_CONV += $(LOCAL_MODULE)
+
+###########################################################
+## SBOM generation
+###########################################################
+include $(BUILD_SBOM_GEN)

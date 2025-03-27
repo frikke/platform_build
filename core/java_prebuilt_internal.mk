@@ -43,7 +43,9 @@ ALL_MODULES.$(my_register_name).CLASSES_JAR := $(common_classes_jar)
 
 #######################################
 # defines built_odex along with rule to install odex
+my_manifest_or_apk := $(my_prebuilt_src_file)
 include $(BUILD_SYSTEM)/dex_preopt_odex_install.mk
+my_manifest_or_apk :=
 #######################################
 $(built_module) : $(my_prebuilt_src_file)
 	$(call copy-file-to-target)
@@ -113,11 +115,6 @@ my_src_aar := $(filter %.aar, $(my_prebuilt_src_file))
 ifneq ($(my_src_aar),)
 # This is .aar file, archive of classes.jar and Android resources.
 
-# run Jetifier if needed
-LOCAL_JETIFIER_INPUT_FILE := $(my_src_aar)
-include $(BUILD_SYSTEM)/jetifier.mk
-my_src_aar := $(LOCAL_JETIFIER_OUTPUT_FILE)
-
 my_src_jar := $(intermediates.COMMON)/aar/classes.jar
 my_src_proguard_options := $(intermediates.COMMON)/aar/proguard.txt
 my_src_android_manifest := $(intermediates.COMMON)/aar/AndroidManifest.xml
@@ -134,13 +131,6 @@ $(my_src_jar) : $(my_src_aar)
 my_prebuilt_android_manifest := $(intermediates.COMMON)/manifest/AndroidManifest.xml
 $(eval $(call copy-one-file,$(my_src_android_manifest),$(my_prebuilt_android_manifest)))
 $(call add-dependency,$(LOCAL_BUILT_MODULE),$(my_prebuilt_android_manifest))
-
-else
-
-# run Jetifier if needed
-LOCAL_JETIFIER_INPUT_FILE := $(my_src_jar)
-include $(BUILD_SYSTEM)/jetifier.mk
-my_src_jar := $(LOCAL_JETIFIER_OUTPUT_FILE)
 
 endif
 
@@ -181,6 +171,12 @@ framework_res_package_export := \
     $(call intermediates-dir-for,APPS,framework-res,,COMMON)/package-export.apk
 endif
 endif
+
+# transitive-res-packages is only populated for Soong modules for now, but needs
+# to exist so that other Make modules can depend on it.  Create an empty file.
+my_transitive_res_packages := $(intermediates.COMMON)/transitive-res-packages
+$(my_transitive_res_packages):
+	touch $@
 
 my_res_package := $(intermediates.COMMON)/package-res.apk
 

@@ -16,13 +16,15 @@
 
 import os
 import os.path
+import tempfile
 import zipfile
 
 import common
 import test_utils
 from add_img_to_target_files import (
-    AddCareMapForAbOta, AddPackRadioImages,
-    CheckAbOtaImages, GetCareMap)
+    AddPackRadioImages,
+    AddCareMapForAbOta, GetCareMap,
+    CheckAbOtaImages)
 from rangelib import RangeSet
 
 
@@ -123,9 +125,6 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
   def _test_AddCareMapForAbOta():
     """Helper function to set up the test for test_AddCareMapForAbOta()."""
     OPTIONS.info_dict = {
-        'extfs_sparse_flag' : '-s',
-        'system_image_size' : 65536,
-        'vendor_image_size' : 40960,
         'system_verity_block_device': '/dev/block/system',
         'vendor_verity_block_device': '/dev/block/vendor',
         'system.build.prop': common.PartitionBuildProps.FromDictionary(
@@ -148,13 +147,13 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     system_image = test_utils.construct_sparse_image([
         (0xCAC1, 6),
         (0xCAC3, 4),
-        (0xCAC1, 8)])
+        (0xCAC1, 6)], "system")
     vendor_image = test_utils.construct_sparse_image([
-        (0xCAC2, 12)])
+        (0xCAC2, 10)], "vendor")
 
     image_paths = {
-        'system' : system_image,
-        'vendor' : vendor_image,
+        'system': system_image,
+        'vendor': vendor_image,
     }
     return image_paths
 
@@ -174,9 +173,9 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
   def test_AddCareMapForAbOta(self):
     image_paths = self._test_AddCareMapForAbOta()
 
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(),
                 "ro.system.build.fingerprint",
                 "google/sailfish/12345:user/dev-keys",
@@ -191,10 +190,10 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     """Partitions without care_map should be ignored."""
     image_paths = self._test_AddCareMapForAbOta()
 
-    AddCareMapForAbOta(
-        None, ['boot', 'system', 'vendor', 'vbmeta'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(
+        care_map_file, ['boot', 'system', 'vendor', 'vbmeta'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(),
                 "ro.system.build.fingerprint",
                 "google/sailfish/12345:user/dev-keys",
@@ -209,9 +208,6 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     """Tests the case for device using AVB."""
     image_paths = self._test_AddCareMapForAbOta()
     OPTIONS.info_dict = {
-        'extfs_sparse_flag': '-s',
-        'system_image_size': 65536,
-        'vendor_image_size': 40960,
         'avb_system_hashtree_enable': 'true',
         'avb_vendor_hashtree_enable': 'true',
         'system.build.prop': common.PartitionBuildProps.FromDictionary(
@@ -226,9 +222,9 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
         ),
     }
 
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(),
                 "ro.system.build.fingerprint",
                 "google/sailfish/12345:user/dev-keys",
@@ -243,19 +239,17 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     """Tests the case for partitions without fingerprint."""
     image_paths = self._test_AddCareMapForAbOta()
     OPTIONS.info_dict = {
-        'extfs_sparse_flag' : '-s',
-        'system_image_size' : 65536,
-        'vendor_image_size' : 40960,
         'system_verity_block_device': '/dev/block/system',
         'vendor_verity_block_device': '/dev/block/vendor',
     }
 
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(), "unknown",
-                "unknown", 'vendor', RangeSet("0-9").to_string_raw(), "unknown",
-                "unknown"]
+                "unknown", 'vendor', RangeSet(
+        "0-9").to_string_raw(), "unknown",
+        "unknown"]
 
     self._verifyCareMap(expected, care_map_file)
 
@@ -264,9 +258,6 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     """Tests the case for partitions with thumbprint."""
     image_paths = self._test_AddCareMapForAbOta()
     OPTIONS.info_dict = {
-        'extfs_sparse_flag': '-s',
-        'system_image_size': 65536,
-        'vendor_image_size': 40960,
         'system_verity_block_device': '/dev/block/system',
         'vendor_verity_block_device': '/dev/block/vendor',
         'system.build.prop': common.PartitionBuildProps.FromDictionary(
@@ -281,9 +272,9 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
         ),
     }
 
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(),
                 "ro.system.build.thumbprint",
                 "google/sailfish/123:user/dev-keys",
@@ -296,13 +287,11 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_AddCareMapForAbOta_skipPartition(self):
     image_paths = self._test_AddCareMapForAbOta()
-
-    # Remove vendor_image_size to invalidate the care_map for vendor.img.
-    del OPTIONS.info_dict['vendor_image_size']
-
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
+    test_utils.erase_avb_footer(image_paths["vendor"])
 
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     expected = ['system', RangeSet("0-5 10-15").to_string_raw(),
                 "ro.system.build.fingerprint",
                 "google/sailfish/12345:user/dev-keys"]
@@ -312,30 +301,29 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_AddCareMapForAbOta_skipAllPartitions(self):
     image_paths = self._test_AddCareMapForAbOta()
+    test_utils.erase_avb_footer(image_paths["system"])
+    test_utils.erase_avb_footer(image_paths["vendor"])
 
-    # Remove the image_size properties for all the partitions.
-    del OPTIONS.info_dict['system_image_size']
-    del OPTIONS.info_dict['vendor_image_size']
+    care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
 
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
-    self.assertFalse(
-        os.path.exists(os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')))
+    self.assertFalse(os.path.exists(care_map_file))
 
   def test_AddCareMapForAbOta_verityNotEnabled(self):
     """No care_map.pb should be generated if verity not enabled."""
     image_paths = self._test_AddCareMapForAbOta()
     OPTIONS.info_dict = {}
-    AddCareMapForAbOta(None, ['system', 'vendor'], image_paths)
-
     care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    AddCareMapForAbOta(care_map_file, ['system', 'vendor'], image_paths)
+
     self.assertFalse(os.path.exists(care_map_file))
 
   def test_AddCareMapForAbOta_missingImageFile(self):
     """Missing image file should be considered fatal."""
     image_paths = self._test_AddCareMapForAbOta()
     image_paths['vendor'] = ''
-    self.assertRaises(AssertionError, AddCareMapForAbOta, None,
+    care_map_file = os.path.join(OPTIONS.input_tmp, 'META', 'care_map.pb')
+    self.assertRaises(common.ExternalError, AddCareMapForAbOta, care_map_file,
                       ['system', 'vendor'], image_paths)
 
   @test_utils.SkipIfExternalToolsUnavailable()
@@ -393,35 +381,18 @@ class AddImagesToTargetFilesTest(test_utils.ReleaseToolsTestCase):
     sparse_image = test_utils.construct_sparse_image([
         (0xCAC1, 6),
         (0xCAC3, 4),
-        (0xCAC1, 6)])
-    OPTIONS.info_dict = {
-        'extfs_sparse_flag' : '-s',
-        'system_image_size' : 53248,
-    }
+        (0xCAC1, 6)], "system")
     name, care_map = GetCareMap('system', sparse_image)
     self.assertEqual('system', name)
-    self.assertEqual(RangeSet("0-5 10-12").to_string_raw(), care_map)
+    self.assertEqual(RangeSet("0-5 10-15").to_string_raw(), care_map)
 
   def test_GetCareMap_invalidPartition(self):
     self.assertRaises(AssertionError, GetCareMap, 'oem', None)
 
-  def test_GetCareMap_invalidAdjustedPartitionSize(self):
-    sparse_image = test_utils.construct_sparse_image([
-        (0xCAC1, 6),
-        (0xCAC3, 4),
-        (0xCAC1, 6)])
-    OPTIONS.info_dict = {
-        'extfs_sparse_flag' : '-s',
-        'system_image_size' : -45056,
-    }
-    self.assertRaises(AssertionError, GetCareMap, 'system', sparse_image)
-
   def test_GetCareMap_nonSparseImage(self):
-    OPTIONS.info_dict = {
-        'system_image_size' : 53248,
-    }
-    # 'foo' is the image filename, which is expected to be not used by
-    # GetCareMap().
-    name, care_map = GetCareMap('system', 'foo')
-    self.assertEqual('system', name)
-    self.assertEqual(RangeSet("0-12").to_string_raw(), care_map)
+    with tempfile.NamedTemporaryFile() as tmpfile:
+      tmpfile.truncate(4096 * 13)
+      test_utils.append_avb_footer(tmpfile.name, "system")
+      name, care_map = GetCareMap('system', tmpfile.name)
+      self.assertEqual('system', name)
+      self.assertEqual(RangeSet("0-12").to_string_raw(), care_map)

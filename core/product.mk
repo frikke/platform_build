@@ -14,98 +14,6 @@
 # limitations under the License.
 #
 
-#
-# Functions for including AndroidProducts.mk files
-# PRODUCT_MAKEFILES is set up in AndroidProducts.mks.
-# Format of PRODUCT_MAKEFILES:
-# <product_name>:<path_to_the_product_makefile>
-# If the <product_name> is the same as the base file name (without dir
-# and the .mk suffix) of the product makefile, "<product_name>:" can be
-# omitted.
-
-#
-# Returns the list of all AndroidProducts.mk files.
-# $(call ) isn't necessary.
-#
-define _find-android-products-files
-$(file <$(OUT_DIR)/.module_paths/AndroidProducts.mk.list) \
-  $(SRC_TARGET_DIR)/product/AndroidProducts.mk
-endef
-
-#
-# For entries returned by get-product-makefiles, decode an entry to a short
-# product name. These either may be in the form of <name>:path/to/file.mk or
-# path/to/<name>.mk
-# $(1): The entry to decode
-#
-# Returns two words:
-#   <name> <file>
-#
-define _decode-product-name
-$(strip \
-  $(eval _cpm_words := $(subst :,$(space),$(1))) \
-  $(if $(word 2,$(_cpm_words)), \
-    $(wordlist 1,2,$(_cpm_words)), \
-    $(basename $(notdir $(1))) $(1)))
-endef
-
-#
-# Validates the new common lunch choices -- ensures that they're in an
-# appropriate form, and are paired with definitions of their products.
-# $(1): The new list of COMMON_LUNCH_CHOICES
-# $(2): The new list of PRODUCT_MAKEFILES
-#
-define _validate-common-lunch-choices
-$(strip $(foreach choice,$(1),\
-  $(eval _parts := $(subst -,$(space),$(choice))) \
-  $(if $(call math_lt,$(words $(_parts)),2), \
-    $(error $(LOCAL_DIR): $(choice): Invalid lunch choice)) \
-  $(if $(call math_gt_or_eq,$(words $(_parts)),4), \
-    $(error $(LOCAL_DIR): $(choice): Invalid lunch choice)) \
-  $(if $(filter-out eng userdebug user,$(word 2,$(_parts))), \
-    $(error $(LOCAL_DIR): $(choice): Invalid variant: $(word 2,$(_parts)))) \
-  $(if $(filter-out $(foreach p,$(2),$(call _decode-product-name,$(p))),$(word 1,$(_parts))), \
-    $(error $(LOCAL_DIR): $(word 1,$(_parts)): Product not defined in this file)) \
-  ))
-endef
-
-#
-# Returns the sorted concatenation of PRODUCT_MAKEFILES
-# variables set in the given AndroidProducts.mk files.
-# $(1): the list of AndroidProducts.mk files.
-#
-# As a side-effect, COMMON_LUNCH_CHOICES will be set to a
-# union of all of the COMMON_LUNCH_CHOICES definitions within
-# each AndroidProducts.mk file.
-#
-define get-product-makefiles
-$(sort \
-  $(eval _COMMON_LUNCH_CHOICES :=) \
-  $(foreach f,$(1), \
-    $(eval PRODUCT_MAKEFILES :=) \
-    $(eval COMMON_LUNCH_CHOICES :=) \
-    $(eval LOCAL_DIR := $(patsubst %/,%,$(dir $(f)))) \
-    $(eval include $(f)) \
-    $(call _validate-common-lunch-choices,$(COMMON_LUNCH_CHOICES),$(PRODUCT_MAKEFILES)) \
-    $(eval _COMMON_LUNCH_CHOICES += $(COMMON_LUNCH_CHOICES)) \
-    $(PRODUCT_MAKEFILES) \
-   ) \
-  $(eval PRODUCT_MAKEFILES :=) \
-  $(eval LOCAL_DIR :=) \
-  $(eval COMMON_LUNCH_CHOICES := $(sort $(_COMMON_LUNCH_CHOICES))) \
-  $(eval _COMMON_LUNCH_CHOICES :=) \
- )
-endef
-
-#
-# Returns the sorted concatenation of all PRODUCT_MAKEFILES
-# variables set in all AndroidProducts.mk files.
-# $(call ) isn't necessary.
-#
-define get-all-product-makefiles
-$(call get-product-makefiles,$(_find-android-products-files))
-endef
-
 # Variables that are meant to hold only a single value.
 # - The value set in the current makefile takes precedence over inherited values
 # - If multiple inherited makefiles set the var, the first-inherited value wins
@@ -116,8 +24,21 @@ _product_list_vars :=
 
 _product_single_value_vars += PRODUCT_NAME
 _product_single_value_vars += PRODUCT_MODEL
+_product_single_value_vars += PRODUCT_NAME_FOR_ATTESTATION
+_product_single_value_vars += PRODUCT_MODEL_FOR_ATTESTATION
+_product_single_value_vars += PRODUCT_BASE_OS
 
-# The resoure configuration options to use for this product.
+# Defines the ELF segment alignment for binaries (executables and shared libraries).
+# The ELF segment alignment has to be a PAGE_SIZE multiple. For example, if
+# PRODUCT_MAX_PAGE_SIZE_SUPPORTED=65536, the possible values for PAGE_SIZE could be
+# 4096, 16384 and 65536.
+_product_single_value_vars += PRODUCT_MAX_PAGE_SIZE_SUPPORTED
+_product_single_value_vars += PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE
+
+# Boolean variable determining if AOSP relies on bionic's PAGE_SIZE macro.
+_product_single_value_vars += PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO
+
+# The resource configuration options to use for this product.
 _product_list_vars += PRODUCT_LOCALES
 _product_list_vars += PRODUCT_AAPT_CONFIG
 _product_single_value_vars += PRODUCT_AAPT_PREF_CONFIG
@@ -126,6 +47,14 @@ _product_list_vars += PRODUCT_HOST_PACKAGES
 _product_list_vars += PRODUCT_PACKAGES
 _product_list_vars += PRODUCT_PACKAGES_DEBUG
 _product_list_vars += PRODUCT_PACKAGES_DEBUG_ASAN
+_product_list_vars += PRODUCT_PACKAGES_ARM64
+
+# packages that are added to PRODUCT_PACKAGES based on the PRODUCT_SHIPPING_API_LEVEL
+# These are only added if the shipping API level is that level or lower
+_product_list_vars += PRODUCT_PACKAGES_SHIPPING_API_LEVEL_29
+_product_list_vars += PRODUCT_PACKAGES_SHIPPING_API_LEVEL_33
+_product_list_vars += PRODUCT_PACKAGES_SHIPPING_API_LEVEL_34
+
 # Packages included only for eng/userdebug builds, when building with EMMA_INSTRUMENT=true
 _product_list_vars += PRODUCT_PACKAGES_DEBUG_JAVA_COVERAGE
 _product_list_vars += PRODUCT_PACKAGES_ENG
@@ -135,6 +64,7 @@ _product_list_vars += PRODUCT_PACKAGES_TESTS
 _product_single_value_vars += PRODUCT_DEVICE
 _product_single_value_vars += PRODUCT_MANUFACTURER
 _product_single_value_vars += PRODUCT_BRAND
+_product_single_value_vars += PRODUCT_BRAND_FOR_ATTESTATION
 
 # These PRODUCT_SYSTEM_* flags, if defined, are used in place of the
 # corresponding PRODUCT_* flags for the sysprops on /system.
@@ -183,6 +113,7 @@ _product_list_vars += PRODUCT_COPY_FILES
 # signing tools can substitute them for the test key embedded by
 # default.
 _product_list_vars += PRODUCT_OTA_PUBLIC_KEYS
+_product_list_vars += PRODUCT_EXTRA_OTA_KEYS
 _product_list_vars += PRODUCT_EXTRA_RECOVERY_KEYS
 
 # Should we use the default resources or add any product specific overlays
@@ -194,9 +125,6 @@ _product_list_vars += PRODUCT_ENFORCE_RRO_EXCLUDED_OVERLAYS
 
 # Package list to apply enforcing RRO.
 _product_list_vars += PRODUCT_ENFORCE_RRO_TARGETS
-
-# Packages to skip auto-generating RROs for when PRODUCT_ENFORCE_RRO_TARGETS is set to *.
-_product_list_vars += PRODUCT_ENFORCE_RRO_EXEMPTED_TARGETS
 
 _product_list_vars += PRODUCT_SDK_ATREE_FILES
 _product_list_vars += PRODUCT_SDK_ADDON_NAME
@@ -216,36 +144,49 @@ _product_list_vars += PRODUCT_RESTRICT_VENDOR_FILES
 # The list of product-specific kernel header dirs
 _product_list_vars += PRODUCT_VENDOR_KERNEL_HEADERS
 
-# A list of module names of BOOTCLASSPATH (jar files)
+# A list of module names in BOOTCLASSPATH (jar files). Each module may be
+# prefixed with "<apex>:", which identifies the APEX that provides it. APEXes
+# are identified by their "variant" names, i.e. their `apex_name` values in
+# Soong, which default to the `name` values. The prefix can also be "platform:"
+# or "system_ext:", and defaults to "platform:" if left out. See the long
+# comment in build/soong/java/dexprepopt_bootjars.go for details.
 _product_list_vars += PRODUCT_BOOT_JARS
 
-# A list of extra BOOTCLASSPATH jars (to be appended after common jars).
-# Products that include device-specific makefiles before AOSP makefiles should use this
-# instead of PRODUCT_BOOT_JARS, so that device-specific jars go after common jars.
+# A list of extra BOOTCLASSPATH jars (to be appended after common jars),
+# following the same format as PRODUCT_BOOT_JARS. Products that include
+# device-specific makefiles before AOSP makefiles should use this instead of
+# PRODUCT_BOOT_JARS, so that device-specific jars go after common jars.
 _product_list_vars += PRODUCT_BOOT_JARS_EXTRA
 
-_product_list_vars += PRODUCT_SUPPORTS_BOOT_SIGNER
-_product_list_vars += PRODUCT_SUPPORTS_VBOOT
-_product_list_vars += PRODUCT_SUPPORTS_VERITY
-_product_list_vars += PRODUCT_SUPPORTS_VERITY_FEC
+# List of jars to be included in the ART boot image for testing.
+_product_list_vars += PRODUCT_TEST_ONLY_ART_BOOT_IMAGE_JARS
+
 _product_list_vars += PRODUCT_SYSTEM_SERVER_APPS
+# List of system_server classpath jars on the platform.
 _product_list_vars += PRODUCT_SYSTEM_SERVER_JARS
-# List of system_server jars delivered via apex. Format = <apex name>:<jar name>.
-_product_list_vars += PRODUCT_UPDATABLE_SYSTEM_SERVER_JARS
+# List of system_server classpath jars delivered via apex. Format = <apex name>:<jar name>.
+_product_list_vars += PRODUCT_APEX_SYSTEM_SERVER_JARS
+# List of jars on the platform that system_server loads dynamically using separate classloaders.
+_product_list_vars += PRODUCT_STANDALONE_SYSTEM_SERVER_JARS
+# List of jars delivered via apex that system_server loads dynamically using separate classloaders.
+# Format = <apex name>:<jar name>
+_product_list_vars += PRODUCT_APEX_STANDALONE_SYSTEM_SERVER_JARS
 # If true, then suboptimal order of system server jars does not cause an error.
 _product_single_value_vars += PRODUCT_BROKEN_SUBOPTIMAL_ORDER_OF_SYSTEM_SERVER_JARS
+# If true, then system server jars defined in Android.mk are supported.
+_product_single_value_vars += PRODUCT_BROKEN_DEPRECATED_MK_SYSTEM_SERVER_JARS
 
 # Additional system server jars to be appended at the end of the common list.
 # This is necessary to avoid jars reordering due to makefile inheritance order.
 _product_list_vars += PRODUCT_SYSTEM_SERVER_JARS_EXTRA
 
-# All of the apps that we force preopt, this overrides WITH_DEXPREOPT.
-_product_list_vars += PRODUCT_ALWAYS_PREOPT_EXTRACTED_APK
+# Set to true to disable <uses-library> checks for a product.
+_product_list_vars += PRODUCT_BROKEN_VERIFY_USES_LIBRARIES
+
 _product_list_vars += PRODUCT_DEXPREOPT_SPEED_APPS
 _product_list_vars += PRODUCT_LOADED_BY_PRIVILEGED_MODULES
 _product_single_value_vars += PRODUCT_VBOOT_SIGNING_KEY
 _product_single_value_vars += PRODUCT_VBOOT_SIGNING_SUBKEY
-_product_single_value_vars += PRODUCT_VERITY_SIGNING_KEY
 _product_single_value_vars += PRODUCT_SYSTEM_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_VENDOR_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_PRODUCT_VERITY_PARTITION
@@ -253,6 +194,7 @@ _product_single_value_vars += PRODUCT_SYSTEM_EXT_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_ODM_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_VENDOR_DLKM_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_ODM_DLKM_VERITY_PARTITION
+_product_single_value_vars += PRODUCT_SYSTEM_DLKM_VERITY_PARTITION
 _product_single_value_vars += PRODUCT_SYSTEM_SERVER_DEBUG_INFO
 _product_single_value_vars += PRODUCT_OTHER_JAVA_DEBUG_INFO
 
@@ -267,9 +209,10 @@ _product_single_value_vars += PRODUCT_DEX_PREOPT_NEVER_ALLOW_STRIPPING
 _product_single_value_vars += PRODUCT_DEX_PREOPT_RESOLVE_STARTUP_STRINGS
 
 # Boot image options.
+_product_list_vars += PRODUCT_DEX_PREOPT_BOOT_IMAGE_PROFILE_LOCATION
 _product_single_value_vars += \
+    PRODUCT_EXPORT_BOOT_IMAGE_TO_DIST \
     PRODUCT_USE_PROFILE_FOR_BOOT_IMAGE \
-    PRODUCT_DEX_PREOPT_BOOT_IMAGE_PROFILE_LOCATION \
     PRODUCT_USES_DEFAULT_ART_CONFIG \
 
 _product_single_value_vars += PRODUCT_SYSTEM_SERVER_COMPILER_FILTER
@@ -282,6 +225,7 @@ _product_single_value_vars += PRODUCT_SYSTEM_EXT_BASE_FS_PATH
 _product_single_value_vars += PRODUCT_ODM_BASE_FS_PATH
 _product_single_value_vars += PRODUCT_VENDOR_DLKM_BASE_FS_PATH
 _product_single_value_vars += PRODUCT_ODM_DLKM_BASE_FS_PATH
+_product_single_value_vars += PRODUCT_SYSTEM_DLKM_BASE_FS_PATH
 
 # The first API level this product shipped with
 _product_single_value_vars += PRODUCT_SHIPPING_API_LEVEL
@@ -312,6 +256,22 @@ _product_list_vars += PRODUCT_CFI_INCLUDE_PATHS
 # Whether any paths are excluded from sanitization when SANITIZE_TARGET=cfi
 _product_list_vars += PRODUCT_CFI_EXCLUDE_PATHS
 
+# Whether any paths should have HWASan enabled for components
+_product_list_vars += PRODUCT_HWASAN_INCLUDE_PATHS
+
+# Whether any paths are excluded from sanitization when SANITIZE_TARGET=hwaddress
+_product_list_vars += PRODUCT_HWASAN_EXCLUDE_PATHS
+
+# Whether any paths should have Memtag_heap enabled for components
+_product_list_vars += PRODUCT_MEMTAG_HEAP_ASYNC_INCLUDE_PATHS
+_product_list_vars += PRODUCT_MEMTAG_HEAP_ASYNC_DEFAULT_INCLUDE_PATHS
+_product_list_vars += PRODUCT_MEMTAG_HEAP_SYNC_INCLUDE_PATHS
+_product_list_vars += PRODUCT_MEMTAG_HEAP_SYNC_DEFAULT_INCLUDE_PATHS
+_product_list_vars += PRODUCT_MEMTAG_HEAP_EXCLUDE_PATHS
+
+# Whether this product wants to start with an empty list of default memtag_heap include paths
+_product_single_value_vars += PRODUCT_MEMTAG_HEAP_SKIP_DEFAULT_PATHS
+
 # Whether the Scudo hardened allocator is disabled platform-wide
 _product_single_value_vars += PRODUCT_DISABLE_SCUDO
 
@@ -320,6 +280,9 @@ _product_list_vars += PRODUCT_EXTRA_VNDK_VERSIONS
 
 # Whether APEX should be compressed or not
 _product_single_value_vars += PRODUCT_COMPRESSED_APEX
+
+# Default fs type for APEX payload image (apex_payload.img)
+_product_single_value_vars += PRODUCT_DEFAULT_APEX_PAYLOAD_TYPE
 
 # VNDK version of product partition. It can be 'current' if the product
 # partitions uses PLATFORM_VNDK_VERSION.
@@ -341,6 +304,12 @@ _product_list_vars += PRODUCT_FORCE_PRODUCT_MODULES_TO_SYSTEM_PARTITION
 # This flag implies PRODUCT_USE_DYNAMIC_PARTITIONS.
 _product_single_value_vars += PRODUCT_RETROFIT_DYNAMIC_PARTITIONS
 
+# List of directories that will be used to gate blueprint modules from the build graph
+_product_list_vars += PRODUCT_SOURCE_ROOT_DIRS
+
+# When this is true, various build time as well as runtime debugfs restrictions are enabled.
+_product_single_value_vars += PRODUCT_SET_DEBUGFS_RESTRICTIONS
+
 # Other dynamic partition feature flags.PRODUCT_USE_DYNAMIC_PARTITION_SIZE and
 # PRODUCT_BUILD_SUPER_PARTITION default to the value of PRODUCT_USE_DYNAMIC_PARTITIONS.
 _product_single_value_vars += \
@@ -354,6 +323,13 @@ _product_single_value_vars += \
 # set this variable to prevent OTA failures.
 _product_list_vars += PRODUCT_OTA_ENFORCE_VINTF_KERNEL_REQUIREMENTS
 
+# If set to true, this product forces HIDL to be enabled by declaring android.hidl.manager
+# and android.hidl.token in the framework manifest. The product will also need to add the
+# 'hwservicemanager' service to PRODUCT_PACKAGES if its SHIPPING_API_LEVEL is greater than 34.
+# This should only be used during bringup for devices that are targeting FCM 202404 and still
+# have partner-owned HIDL interfaces that are being converted to AIDL.
+_product_single_value_vars += PRODUCT_HIDL_ENABLED
+
 # If set to true, this product builds a generic OTA package, which installs generic system images
 # onto matching devices. The product may only build a subset of system images (e.g. only
 # system.img), so devices need to install the package in a system-only OTA manner.
@@ -362,6 +338,10 @@ _product_single_value_vars += PRODUCT_BUILD_GENERIC_OTA_PACKAGE
 _product_list_vars += PRODUCT_MANIFEST_PACKAGE_NAME_OVERRIDES
 _product_list_vars += PRODUCT_PACKAGE_NAME_OVERRIDES
 _product_list_vars += PRODUCT_CERTIFICATE_OVERRIDES
+
+# Overrides the (apex, jar) pairs above when determining the on-device location. The format is:
+# <old_apex>:<old_jar>:<new_apex>:<new_jar>
+_product_list_vars += PRODUCT_CONFIGURED_JAR_LOCATION_OVERRIDES
 
 # Controls for whether different partitions are built for the current product.
 _product_single_value_vars += PRODUCT_BUILD_SYSTEM_IMAGE
@@ -372,22 +352,32 @@ _product_single_value_vars += PRODUCT_BUILD_SYSTEM_EXT_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_ODM_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_VENDOR_DLKM_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_ODM_DLKM_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_SYSTEM_DLKM_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_CACHE_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_RAMDISK_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_USERDATA_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_RECOVERY_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_BOOT_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_INIT_BOOT_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_DEBUG_BOOT_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_VENDOR_BOOT_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_VENDOR_KERNEL_BOOT_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_DEBUG_VENDOR_BOOT_IMAGE
 _product_single_value_vars += PRODUCT_BUILD_VBMETA_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_SUPER_EMPTY_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_PVMFW_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_DESKTOP_RECOVERY_IMAGE
+_product_single_value_vars += PRODUCT_BUILD_DESKTOP_UPDATE_IMAGE
 
-# List of boot jars delivered via apex
-_product_list_vars += PRODUCT_UPDATABLE_BOOT_JARS
-
-# Whether the product would like to check prebuilt ELF files.
-_product_single_value_vars += PRODUCT_CHECK_ELF_FILES
+# List of boot jars delivered via updatable APEXes, following the same format as
+# PRODUCT_BOOT_JARS.
+_product_list_vars += PRODUCT_APEX_BOOT_JARS
 
 # If set, device uses virtual A/B.
 _product_single_value_vars += PRODUCT_VIRTUAL_AB_OTA
+
+# If set, device uses virtual A/B Compression.
+_product_single_value_vars += PRODUCT_VIRTUAL_AB_COMPRESSION
 
 # If set, device retrofits virtual A/B.
 _product_single_value_vars += PRODUCT_VIRTUAL_AB_OTA_RETROFIT
@@ -402,35 +392,121 @@ _product_single_value_vars += PRODUCT_OTA_FORCE_NON_AB_PACKAGE
 # If set, Java module in product partition cannot use hidden APIs.
 _product_single_value_vars += PRODUCT_ENFORCE_PRODUCT_PARTITION_INTERFACE
 
-# If set, only java_sdk_library can be used at inter-partition dependency.
-# Note: Build error if BOARD_VNDK_VERSION is not set while
-#       PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY is true, because
-#       PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY has no meaning if
-#       BOARD_VNDK_VERSION is not set.
-# Note: When PRODUCT_ENFORCE_PRODUCT_PARTITION_INTERFACE is not set, there are
-#       no restrictions at dependency between system and product partition.
-_product_single_value_vars += PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY
+# Install a copy of the debug policy to the system_ext partition, and allow
+# init-second-stage to load debug policy from system_ext.
+# This option is only meant to be set by compliance GSI targets.
+_product_single_value_vars += PRODUCT_INSTALL_DEBUG_POLICY_TO_SYSTEM_EXT
 
-# Allowlist for PRODUCT_ENFORCE_INTER_PARTITION_JAVA_SDK_LIBRARY option.
-# Listed modules are allowed at inter-partition dependency even if it isn't
-# a java_sdk_library module.
-_product_list_vars += PRODUCT_INTER_PARTITION_JAVA_LIBRARY_ALLOWLIST
+# If set, fsverity metadata files will be generated for each files in the
+# allowlist, plus an manifest APK per partition. For example,
+# /system/framework/service.jar will come with service.jar.fsv_meta in the same
+# directory; the file information will also be included in
+# /system/etc/security/fsverity/BuildManifest.apk
+_product_single_value_vars += PRODUCT_FSVERITY_GENERATE_METADATA
 
-_product_single_value_vars += PRODUCT_INSTALL_EXTRA_FLATTENED_APEXES
+# If true, this builds the mainline modules from source. This overrides any
+# prebuilts selected via RELEASE_APEX_CONTRIBUTIONS_* build flags for the
+# current release config.
+_product_single_value_vars += PRODUCT_MODULE_BUILD_FROM_SOURCE
+
+# If true, installs a full version of com.android.virt APEX.
+_product_single_value_vars += PRODUCT_AVF_ENABLED
+
+# If false, disable the AVF remote attestaton feature.
+_product_single_value_vars += PRODUCT_AVF_REMOTE_ATTESTATION_DISABLED
+
+# If true, kernel with modules will be used for Microdroid VMs.
+_product_single_value_vars += PRODUCT_AVF_KERNEL_MODULES_ENABLED
+
+# If true, the memory controller will be force-enabled in the cgroup v2 hierarchy
+_product_single_value_vars += PRODUCT_MEMCG_V2_FORCE_ENABLED
+
+# If true, the cgroup v2 hierarchy will be split into apps/system subtrees
+_product_single_value_vars += PRODUCT_CGROUP_V2_SYS_APP_ISOLATION_ENABLED
+
+# List of .json files to be merged/compiled into vendor/etc/linker.config.pb and product/etc/linker.config.pb
+_product_list_vars += PRODUCT_VENDOR_LINKER_CONFIG_FRAGMENTS
+_product_list_vars += PRODUCT_PRODUCT_LINKER_CONFIG_FRAGMENTS
+
+# Whether to use userfaultfd GC.
+# Possible values are:
+# - "default" or empty: both the build system and the runtime determine whether to use userfaultfd
+#   GC based on the vendor API level
+# - "true": forces the build system to use userfaultfd GC regardless of the vendor API level; the
+#   runtime determines whether to use userfaultfd GC based on the kernel support. Note that the
+#   device may have to re-compile everything on the first boot if the kernel doesn't support
+#   userfaultfd
+# - "false": disallows the build system and the runtime to use userfaultfd GC even if the device
+#   supports it. This option is temporary - the plan is to remove it by Aug 2025, at which time
+#   Mainline updates of the ART module will ignore it as well.
+_product_single_value_vars += PRODUCT_ENABLE_UFFD_GC
+
+# Specifies COW version to be used by update_engine and libsnapshot. If this value is not
+# specified we default to COW version 2 in update_engine for backwards compatibility
+_product_single_value_vars += PRODUCT_VIRTUAL_AB_COW_VERSION
+
+# Specifies maximum bytes to be compressed at once during ota. Options: 4096, 8192, 16384, 32768, 65536, 131072, 262144.
+_product_single_value_vars += PRODUCT_VIRTUAL_AB_COMPRESSION_FACTOR
+
+# If set, determines whether the build system checks vendor seapp contexts violations.
+_product_single_value_vars += PRODUCT_CHECK_VENDOR_SEAPP_VIOLATIONS
+
+# If set, determines whether the build system checks dev type violations.
+_product_single_value_vars += PRODUCT_CHECK_DEV_TYPE_VIOLATIONS
+
+_product_list_vars += PRODUCT_AFDO_PROFILES
+
+_product_single_value_vars += PRODUCT_SCUDO_ALLOCATION_RING_BUFFER_SIZE
+
+_product_list_vars += PRODUCT_RELEASE_CONFIG_MAPS
+
+_product_list_vars += PRODUCT_VALIDATION_CHECKS
+
+_product_single_value_vars += PRODUCT_BUILD_FROM_SOURCE_STUB
+
+_product_single_value_vars += PRODUCT_BUILD_IGNORE_APEX_CONTRIBUTION_CONTENTS
+
+_product_single_value_vars += PRODUCT_HIDDEN_API_EXPORTABLE_STUBS
+
+_product_single_value_vars += PRODUCT_EXPORT_RUNTIME_APIS
+
+# If set, determines which version of the GKI is used as guest kernel for Microdroid VMs.
+# TODO(b/325991735): link to documentation once it is done.
+_product_single_value_vars += PRODUCT_AVF_MICRODROID_GUEST_GKI_VERSION
+
+# Enables 16KB developer option for device if set.
+_product_single_value_vars += PRODUCT_16K_DEVELOPER_OPTION
+
+# If set, adb root will be disabled (really ro.debuggable=0) in userdebug
+# builds. It's already off disabled in user builds. Eng builds are unaffected
+# by this flag.
+_product_single_value_vars += PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG
+
+# If set, the default value of the versionName of apps will include the build number.
+_product_single_value_vars += PRODUCT_BUILD_APPS_WITH_BUILD_NUMBER
+
+# If set, build would generate system image from Soong-defined module.
+_product_single_value_vars += PRODUCT_SOONG_DEFINED_SYSTEM_IMAGE
+
+# List of stub libraries specific to the product that are already present in the system image and
+# should be included in the system_linker_config.
+_product_list_vars += PRODUCT_EXTRA_STUB_LIBRARIES
+
+# If set to true, all Android.mk files will be ignored.
+_product_single_value_vars += PRODUCT_IGNORE_ALL_ANDROIDMK
+# When PRODUCT_IGNORE_ALL_ANDROIDMK is set to true, this variable will be used to allow some Android.mk files.
+_product_list_vars += PRODUCT_ALLOWED_ANDROIDMK_FILES
+# When PRODUCT_IGNORE_ALL_ANDROIDMK is set to true, path of file that contains a list of allowed Android.mk files
+_product_single_value_vars += PRODUCT_ANDROIDMK_ALLOWLIST_FILE
+# Setting PRODUCT_SOONG_ONLY will cause the build to default to --soong-only mode, and the main
+# kati invocation will not be run.
+_product_single_value_vars += PRODUCT_SOONG_ONLY
+
+# If set to true, use NOTICE.xml.gz generated by soong
+_product_single_value_vars += PRODUCT_USE_SOONG_NOTICE_XML
 
 .KATI_READONLY := _product_single_value_vars _product_list_vars
 _product_var_list :=$= $(_product_single_value_vars) $(_product_list_vars)
-
-define dump-product
-$(warning ==== $(1) ====)\
-$(foreach v,$(_product_var_list),\
-$(warning PRODUCTS.$(1).$(v) := $(call get-product-var,$(1),$(v))))\
-$(warning --------)
-endef
-
-define dump-products
-$(foreach p,$(PRODUCTS),$(call dump-product,$(p)))
-endef
 
 #
 # Functions for including product makefiles
@@ -440,24 +516,27 @@ endef
 # $(1): product to inherit
 #
 # To be called from product makefiles, and is later evaluated during the import-nodes
-# call below. It does three things:
+# call below. It does the following:
 #  1. Inherits all of the variables from $1.
 #  2. Records the inheritance in the .INHERITS_FROM variable
-#  3. Records the calling makefile in PARENT_PRODUCT_FILES
 #
-# (2) and (3) can be used together to reconstruct the include hierarchy
+# (2) and the PRODUCTS variable can be used together to reconstruct the include hierarchy
 # See e.g. product-graph.mk for an example of this.
 #
 define inherit-product
-  $(if $(findstring ../,$(1)),\
-    $(eval np := $(call normalize-paths,$(1))),\
-    $(eval np := $(strip $(1))))\
-  $(foreach v,$(_product_var_list), \
-      $(eval $(v) := $($(v)) $(INHERIT_TAG)$(np))) \
-  $(eval current_mk := $(strip $(word 1,$(_include_stack)))) \
-  $(eval inherit_var := PRODUCTS.$(current_mk).INHERITS_FROM) \
-  $(eval $(inherit_var) := $(sort $($(inherit_var)) $(np))) \
-  $(eval PARENT_PRODUCT_FILES := $(sort $(PARENT_PRODUCT_FILES) $(current_mk)))
+  $(eval _inherit_product_wildcard := $(wildcard $(1)))\
+  $(if $(_inherit_product_wildcard),,$(error $(1) does not exist.))\
+  $(foreach part,$(_inherit_product_wildcard),\
+    $(if $(findstring ../,$(part)),\
+      $(eval np := $(call normalize-paths,$(part))),\
+      $(eval np := $(strip $(part))))\
+    $(foreach v,$(_product_var_list), \
+        $(eval $(v) := $($(v)) $(INHERIT_TAG)$(np))) \
+    $(eval current_mk := $(strip $(word 1,$(_include_stack)))) \
+    $(eval inherit_var := PRODUCTS.$(current_mk).INHERITS_FROM) \
+    $(eval $(inherit_var) := $(sort $($(inherit_var)) $(np))) \
+    $(call dump-inherit,$(current_mk),$(1)) \
+    $(call dump-config-vals,$(current_mk),inherit))
 endef
 
 # Specifies a number of path prefixes, relative to PRODUCT_OUT, where the
@@ -505,71 +584,25 @@ endef
 
 
 #
-# Does various consistency checks on all of the known products.
+# Does various consistency checks on the current product.
 # Takes no parameters, so $(call ) is not necessary.
 #
-define check-all-products
+define check-current-product
 $(if ,, \
-  $(eval _cap_names :=) \
-  $(foreach p,$(PRODUCTS), \
-    $(eval pn := $(strip $(PRODUCTS.$(p).PRODUCT_NAME))) \
-    $(if $(pn),,$(error $(p): PRODUCT_NAME must be defined.)) \
-    $(if $(filter $(pn),$(_cap_names)), \
-      $(error $(p): PRODUCT_NAME must be unique; "$(pn)" already used by $(strip \
-          $(foreach \
-            pp,$(PRODUCTS),
-              $(if $(filter $(pn),$(PRODUCTS.$(pp).PRODUCT_NAME)), \
-                $(pp) \
-               ))) \
-       ) \
-     ) \
-    $(eval _cap_names += $(pn)) \
-    $(if $(call is-c-identifier,$(pn)),, \
-      $(error $(p): PRODUCT_NAME must be a valid C identifier, not "$(pn)") \
-     ) \
-    $(eval pb := $(strip $(PRODUCTS.$(p).PRODUCT_BRAND))) \
-    $(if $(pb),,$(error $(p): PRODUCT_BRAND must be defined.)) \
-    $(foreach cf,$(strip $(PRODUCTS.$(p).PRODUCT_COPY_FILES)), \
-      $(if $(filter 2 3,$(words $(subst :,$(space),$(cf)))),, \
-        $(error $(p): malformed COPY_FILE "$(cf)") \
-       ) \
-     ) \
-   ) \
-)
-endef
-
-
-#
-# Returns the product makefile path for the product with the provided name
-#
-# $(1): short product name like "generic"
-#
-define _resolve-short-product-name
-  $(eval pn := $(strip $(1)))
-  $(eval p := \
-      $(foreach p,$(PRODUCTS), \
-          $(if $(filter $(pn),$(PRODUCTS.$(p).PRODUCT_NAME)), \
-            $(p) \
-       )) \
-   )
-  $(eval p := $(sort $(p)))
-  $(if $(filter 1,$(words $(p))), \
-    $(p), \
-    $(if $(filter 0,$(words $(p))), \
-      $(error No matches for product "$(pn)"), \
-      $(error Product "$(pn)" ambiguous: matches $(p)) \
-    ) \
-  )
-endef
-define resolve-short-product-name
-$(strip $(call _resolve-short-product-name,$(1)))
+  $(if $(call is-c-identifier,$(PRODUCT_NAME)),, \
+    $(error $(INTERNAL_PRODUCT): PRODUCT_NAME must be a valid C identifier, not "$(pn)")) \
+  $(if $(PRODUCT_BRAND),, \
+    $(error $(INTERNAL_PRODUCT): PRODUCT_BRAND must be defined.)) \
+  $(foreach cf,$(strip $(PRODUCT_COPY_FILES)), \
+    $(if $(filter 2 3,$(words $(subst :,$(space),$(cf)))),, \
+      $(error $(p): malformed COPY_FILE "$(cf)"))))
 endef
 
 # BoardConfig variables that are also inherited in product mks. Should ideally
 # be cleaned up to not be product variables.
 _readonly_late_variables := \
   DEVICE_PACKAGE_OVERLAYS \
-  WITH_DEXPREOPT_BOOT_IMG_AND_SYSTEM_SERVER_ONLY \
+  WITH_DEXPREOPT_ART_BOOT_IMG_ONLY \
 
 # Modified internally in the build system
 _readonly_late_variables += \
@@ -604,6 +637,8 @@ get-product-var = $(PRODUCTS.$(strip $(1)).$(2))
 # to a shorthand that is more convenient to read from elsewhere.
 #
 define strip-product-vars
+$(call dump-phase-start,PRODUCT-EXPAND,,$(_product_var_list),$(_product_single_value_vars), \
+		build/make/core/product.mk) \
 $(foreach v,\
   $(_product_var_list) \
     PRODUCT_ENFORCE_PACKAGES_EXIST \
@@ -611,7 +646,8 @@ $(foreach v,\
   $(eval $(v) := $(strip $(PRODUCTS.$(INTERNAL_PRODUCT).$(v)))) \
   $(eval get-product-var = $$(if $$(filter $$(1),$$(INTERNAL_PRODUCT)),$$($$(2)),$$(PRODUCTS.$$(strip $$(1)).$$(2)))) \
   $(KATI_obsolete_var PRODUCTS.$(INTERNAL_PRODUCT).$(v),Use $(v) instead) \
-)
+) \
+$(call dump-phase-end,build/make/core/product.mk)
 endef
 
 define add-to-product-copy-files-if-exists

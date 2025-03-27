@@ -1,4 +1,205 @@
-# Build System Changes for Android.mk Writers
+# Build System Changes for Android.mk/Android.bp Writers
+
+## Soong genrules are now sandboxed
+
+Previously, soong genrules could access any files in the source tree, without specifying them as
+inputs. This makes them incorrect in incremental builds, and incompatible with RBE and Bazel.
+
+Now, genrules are sandboxed so they can only access their listed srcs. Modules denylisted in
+genrule/allowlists.go are exempt from this. You can also set `BUILD_BROKEN_GENRULE_SANDBOXING`
+in board config to disable this behavior.
+
+## Partitions are no longer affected by previous builds
+
+Partition builds used to include everything in their staging directories, and building an
+individual module will install it to the staging directory. Thus, previously, `m mymodule` followed
+by `m` would cause `mymodule` to be presinstalled on the device, even if it wasn't listed in
+`PRODUCT_PACKAGES`.
+
+This behavior has been changed, and now the partition images only include what they'd have if you
+did a clean build. This behavior can be disabled by setting the
+`BUILD_BROKEN_INCORRECT_PARTITION_IMAGES` environment variable or board config variable.
+
+Manually adding make rules that build to the staging directories without going through the make
+module system will not be compatible with this change. This includes many usages of
+`LOCAL_POST_INSTALL_CMD`.
+
+## Perform validation of Soong plugins
+
+Each Soong plugin will require manual work to migrate to Bazel. In order to
+minimize the manual work outside of build/soong, we are restricting plugins to
+those that exist today and those in vendor or hardware directories.
+
+If you need to extend the build system via a plugin, please reach out to the
+build team via email android-building@googlegroups.com (external) for any
+questions, or see [go/soong](http://go/soong) (internal).
+
+To omit the validation, `BUILD_BROKEN_PLUGIN_VALIDATION` expects a
+space-separated list of plugins to omit from the validation. This must be set
+within a product configuration .mk file, board config .mk file, or buildspec.mk.
+
+## Python 2 to 3 migration
+
+Python 2 has been completely removed from the build. Please migrate any remaining usages to
+Python 3, and remove any version-specific properties from bp files.
+
+## Stop referencing sysprop_library directly from cc modules
+
+For the migration to Bazel, we are no longer mapping sysprop_library targets
+to their generated `cc_library` counterparts when dependning on them from a
+cc module. Instead, directly depend on the generated module by prefixing the
+module name with `lib`. For example, depending on the following module:
+
+```
+sysprop_library {
+    name: "foo",
+    srcs: ["foo.sysprop"],
+}
+```
+
+from a module named `bar` can be done like so:
+
+```
+cc_library {
+    name: "bar",
+    srcs: ["bar.cc"],
+    deps: ["libfoo"],
+}
+```
+
+Failure to do this will result in an error about a missing variant.
+
+## Gensrcs starts disallowing depfile property
+
+To migrate all gensrcs to Bazel, we are restricting the use of depfile property
+because Bazel requires specifying the dependencies directly.
+
+To fix existing uses, remove depfile and directly specify all the dependencies
+in .bp files. For example:
+
+```
+gensrcs {
+    name: "framework-cppstream-protos",
+    tools: [
+        "aprotoc",
+        "protoc-gen-cppstream",
+    ],
+    cmd: "mkdir -p $(genDir)/$(in) " +
+        "&& $(location aprotoc) " +
+        "  --plugin=$(location protoc-gen-cppstream) " +
+        "  -I . " +
+        "  $(in) ",
+    srcs: [
+        "bar.proto",
+    ],
+    output_extension: "srcjar",
+}
+```
+where `bar.proto` imports `external.proto` would become
+
+```
+gensrcs {
+    name: "framework-cppstream-protos",
+    tools: [
+        "aprotoc",
+        "protoc-gen-cpptream",
+    ],
+    tool_files: [
+        "external.proto",
+    ],
+    cmd: "mkdir -p $(genDir)/$(in) " +
+        "&& $(location aprotoc) " +
+        "  --plugin=$(location protoc-gen-cppstream) " +
+        "  $(in) ",
+    srcs: [
+        "bar.proto",
+    ],
+    output_extension: "srcjar",
+}
+```
+as in https://android-review.googlesource.com/c/platform/frameworks/base/+/2125692/.
+
+`BUILD_BROKEN_DEPFILE` can be used to allowlist usage of depfile in `gensrcs`.
+
+If `depfile` is needed for generating javastream proto, `java_library` with `proto.type`
+set `stream` is the alternative solution. Sees
+https://android-review.googlesource.com/c/platform/packages/modules/Permission/+/2118004/
+for an example.
+
+## Genrule starts disallowing directory inputs
+
+To better specify the inputs to the build, we are restricting use of directories
+as inputs to genrules.
+
+To fix existing uses, change inputs to specify the inputs and update the command
+accordingly. For example:
+
+```
+genrule: {
+    name: "foo",
+    srcs: ["bar"],
+    cmd: "cp $(location bar)/*.xml $(gendir)",
+    ...
+}
+```
+
+would become
+
+```
+genrule: {
+    name: "foo",
+    srcs: ["bar/*.xml"],
+    cmd: "cp $(in) $(gendir)",
+    ...
+}
+```
+
+`BUILD_BROKEN_INPUT_DIR_MODULES` can be used to allowlist specific directories
+with genrules that have input directories.
+
+## Dexpreopt starts enforcing `<uses-library>` checks (for Java modules)
+
+In order to construct correct class loader context for dexpreopt, build system
+needs to know about the shared library dependencies of Java modules listed in
+the `<uses-library>` tags in the manifest. Since the build system does not have
+access to the manifest contents, that information must be present in the build
+files. In simple cases Soong is able to infer it from its knowledge of Java SDK
+libraries and the `libs` property in Android.bp, but in more complex cases it is
+necessary to add the missing information in Android.bp/Android.mk manually.
+
+To specify a list of libraries for a given modules, use:
+
+* Android.bp properties: `uses_libs`, `optional_uses_libs`
+* Android.mk variables: `LOCAL_USES_LIBRARIES`, `LOCAL_OPTIONAL_USES_LIBRARIES`
+
+If a library is in `libs`, it usually should *not* be added to the above
+properties, and Soong should be able to infer the `<uses-library>` tag. But
+sometimes a library also needs additional information in its
+Android.bp/Android.mk file (e.g. when it is a `java_library` rather than a
+`java_sdk_library`, or when the library name is different from its module name,
+or when the module is defined in Android.mk rather than Android.bp). In such
+cases it is possible to tell the build system that the library provides a
+`<uses-library>` with a given name (however, this is discouraged and will be
+deprecated in the future, and it is recommended to fix the underlying problem):
+
+* Android.bp property: `provides_uses_lib`
+* Android.mk variable: `LOCAL_PROVIDES_USES_LIBRARY`
+
+It is possible to disable the check on a per-module basis. When doing that it is
+also recommended to disable dexpreopt, as disabling a failed check will result
+in incorrect class loader context recorded in the .odex file, which will cause
+class loader context mismatch and dexopt at first boot.
+
+* Android.bp property: `enforce_uses_lib`
+* Android.mk variable: `LOCAL_ENFORCE_USES_LIBRARIES`
+
+Finally, it is possible to globally disable the check:
+
+* For a given product: `PRODUCT_BROKEN_VERIFY_USES_LIBRARIES := true`
+* On the command line: `RELAX_USES_LIBRARY_CHECK=true`
+
+The environment variable overrides the product variable, so it is possible to
+disable the check for a product, but quickly re-enable it for a local build.
 
 ## `LOCAL_REQUIRED_MODULES` requires listed modules to exist {#BUILD_BROKEN_MISSING_REQUIRED_MODULES}
 
@@ -17,9 +218,9 @@ To temporarily relax missing required modules check, use:
 System properties for each of the partition is supposed to be set via following
 product config variables.
 
-For system partititon,
+For system partition,
 
-* `PRODUCT_SYSTEM_PROPERITES`
+* `PRODUCT_SYSTEM_PROPERTIES`
 * `PRODUCT_SYSTEM_DEFAULT_PROPERTIES` is highly discouraged. Will be deprecated.
 
 For vendor partition,
@@ -318,6 +519,24 @@ $(call dist-for-goals,foo,bar/baz)
 ```
 
 will copy `bar/baz` into `$DIST_DIR/baz` when `m foo dist` is run.
+
+#### FILE_NAME_TAG  {#FILE_NAME_TAG}
+
+To embed the `BUILD_NUMBER` (or for local builds, `eng.${USER}`), include
+`FILE_NAME_TAG_PLACEHOLDER` in the destination:
+
+``` make
+# you can use dist-for-goals-with-filenametag function
+$(call dist-for-goals-with-filenametag,foo,bar.zip)
+# or use FILE_NAME_TAG_PLACEHOLDER manually
+$(call dist-for-goals,foo,bar.zip:baz-FILE_NAME_TAG_PLACEHOLDER.zip)
+```
+
+Which will produce `$DIST_DIR/baz-1234567.zip` on build servers which set
+`BUILD_NUMBER=1234567`, or `$DIST_DIR/baz-eng.builder.zip` for local builds.
+
+If you just want to append `BUILD_NUMBER` at the end of basename, use
+`dist-for-goals-with-filenametag` instead of `dist-for-goals`.
 
 #### Renames during copy
 
@@ -658,6 +877,38 @@ is 26 or 27, you can add `"target-level"="1"` to your device manifest instead.
 Clang is the default and only supported Android compiler, so there is no reason
 for this option to exist.
 
+### Stop using clang property
+
+The clang property has been deleted from Soong. To fix any build errors, remove the clang
+property from affected Android.bp files using bpmodify.
+
+
+``` make
+go run bpmodify.go -w -m=module_name -remove-property=true -property=clang filepath
+```
+
+`BUILD_BROKEN_CLANG_PROPERTY` can be used as temporarily workaround
+
+
+### Stop using clang_cflags and clang_asflags
+
+clang_cflags and clang_asflags are deprecated.
+To fix any build errors, use bpmodify to either
+    - move the contents of clang_asflags/clang_cflags into asflags/cflags or
+    - delete clang_cflags/as_flags as necessary
+
+To Move the contents:
+``` make
+go run bpmodify.go -w -m=module_name -move-property=true -property=clang_cflags -new-location=cflags filepath
+```
+
+To Delete:
+``` make
+go run bpmodify.go -w -m=module_name -remove-property=true -property=clang_cflags filepath
+```
+
+`BUILD_BROKEN_CLANG_ASFLAGS` and `BUILD_BROKEN_CLANG_CFLAGS` can be used as temporarily workarounds
+
 ### Other envsetup.sh variables  {#other_envsetup_variables}
 
 * ANDROID_TOOLCHAIN
@@ -670,6 +921,39 @@ These are all exported from envsetup.sh, but don't have clear equivalents within
 the makefile system. If you need one of them, you'll have to set up your own
 version.
 
+## Soong config variables
+
+### Soong config string variables must list all values they can be set to
+
+In order to facilitate the transition to bazel, all soong_config_string_variables
+must only be set to a value listed in their `values` property, or an empty string.
+It is a build error otherwise.
+
+Example Android.bp:
+```
+soong_config_string_variable {
+    name: "my_string_variable",
+    values: [
+        "foo",
+        "bar",
+    ],
+}
+
+soong_config_module_type {
+    name: "my_cc_defaults",
+    module_type: "cc_defaults",
+    config_namespace: "my_namespace",
+    variables: ["my_string_variable"],
+    properties: [
+        "shared_libs",
+        "static_libs",
+    ],
+}
+```
+Product config:
+```
+$(call soong_config_set,my_namespace,my_string_variable,baz) # Will be an error as baz is not listed in my_string_variable's values.
+```
 
 [build/soong/Changes.md]: https://android.googlesource.com/platform/build/soong/+/master/Changes.md
 [build/soong/docs/best_practices.md#headers]: https://android.googlesource.com/platform/build/soong/+/master/docs/best_practices.md#headers

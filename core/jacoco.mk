@@ -50,6 +50,7 @@ $(my_unzipped_timestamp_path): $(LOCAL_FULL_CLASSES_PRE_JACOCO_JAR)
 	unzip -qDD $(PRIVATE_FULL_CLASSES_PRE_JACOCO_JAR) \
 	  -d $(PRIVATE_UNZIPPED_PATH) \
 	  $(PRIVATE_INCLUDE_ARGS)
+	chmod -R =rwX $(PRIVATE_UNZIPPED_PATH)
 	(cd $(PRIVATE_UNZIPPED_PATH) && rm -rf $(PRIVATE_EXCLUDE_ARGS))
 	(cd $(PRIVATE_UNZIPPED_PATH) && find -not -name "*.class" -type f -exec rm {} \;)
 	touch $(PRIVATE_UNZIPPED_TIMESTAMP_PATH)
@@ -71,7 +72,11 @@ $(my_classes_to_report_on_path): $(my_unzipped_timestamp_path)
 	zip -q $@ \
 	  -r $(PRIVATE_UNZIPPED_PATH)
 
-
+# Make a rule to copy the jacoco-report-classes.jar to a packaging directory.
+$(eval $(call copy-one-file,$(my_classes_to_report_on_path),\
+  $(call local-packaging-dir,jacoco)/jacoco-report-classes.jar))
+$(call add-dependency,$(LOCAL_BUILT_MODULE),\
+  $(call local-packaging-dir,jacoco)/jacoco-report-classes.jar)
 
   # make a task that invokes instrumentation
   my_instrumented_path := $(my_files)/work/instrumented/classes

@@ -35,6 +35,10 @@ $(error $(LOCAL_PATH): Package modules may not define LOCAL_MODULE_SUFFIX)
 endif
 LOCAL_MODULE_SUFFIX := $(COMMON_ANDROID_PACKAGE_SUFFIX)
 
+ifneq ($(strip $(LOCAL_MODULE_STEM)$(LOCAL_BUILT_MODULE_STEM)),)
+$(error $(LOCAL_PATH): Package modules may not define LOCAL_MODULE_STEM or LOCAL_BUILT_MODULE_STEM)
+endif
+
 ifneq ($(strip $(LOCAL_MODULE)),)
 $(error $(LOCAL_PATH): Package modules may not define LOCAL_MODULE)
 endif
@@ -93,38 +97,41 @@ LOCAL_MANIFEST_PACKAGE_NAME := $(override_manifest_name)
 endif
 
 include $(BUILD_SYSTEM)/force_aapt2.mk
+# validate that app contains a manifest file for aapt2
+ifeq (,$(strip $(LOCAL_MANIFEST_FILE)$(LOCAL_FULL_MANIFEST_FILE)))
+  ifeq (,$(wildcard $(LOCAL_PATH)/AndroidManifest.xml))
+    $(call pretty-error,App missing manifest file which is required by aapt2. \
+Provide a manifest file by either setting LOCAL_MANIFEST_FILE in Android.mk \
+or via a AndroidManifest.xml in this directory)
+  endif
+endif
 
 # Process Support Library dependencies.
 include $(BUILD_SYSTEM)/support_libraries.mk
 
 # Determine whether auto-RRO is enabled for this package.
 enforce_rro_enabled :=
-ifneq (,$(filter *, $(PRODUCT_ENFORCE_RRO_TARGETS)))
-  # * means all system and system_ext APKs, so enable conditionally based on module path.
-  # Note that modules in PRODUCT_ENFORCE_RRO_EXEMPTED_TARGETS are excluded even if it is '*'
+ifeq (,$(filter tests,$(LOCAL_MODULE_TAGS)))
+  ifneq (,$(filter *, $(PRODUCT_ENFORCE_RRO_TARGETS)))
+    # * means all system and system_ext APKs, so enable conditionally based on module path.
 
-  # Note that base_rules.mk has not yet been included, so it's likely that only
-  # one of LOCAL_MODULE_PATH and the LOCAL_X_MODULE flags has been set.
-  ifeq (,$(LOCAL_MODULE_PATH))
-    non_rro_target_module := $(filter true,\
-        $(LOCAL_ODM_MODULE) \
-        $(LOCAL_OEM_MODULE) \
-        $(LOCAL_PRODUCT_MODULE) \
-        $(LOCAL_PROPRIETARY_MODULE) \
-        $(LOCAL_VENDOR_MODULE))
-    enforce_rro_enabled := $(if $(non_rro_target_module),,true)
-  else ifneq ($(filter $(TARGET_OUT)/%,$(LOCAL_MODULE_PATH)),)
+    # Note that base_rules.mk has not yet been included, so it's likely that only
+    # one of LOCAL_MODULE_PATH and the LOCAL_X_MODULE flags has been set.
+    ifeq (,$(LOCAL_MODULE_PATH))
+      non_rro_target_module := $(filter true,\
+          $(LOCAL_ODM_MODULE) \
+          $(LOCAL_OEM_MODULE) \
+          $(LOCAL_PRODUCT_MODULE) \
+          $(LOCAL_PROPRIETARY_MODULE) \
+          $(LOCAL_VENDOR_MODULE))
+      enforce_rro_enabled := $(if $(non_rro_target_module),,true)
+    else ifneq ($(filter $(TARGET_OUT)/%,$(LOCAL_MODULE_PATH)),)
+      enforce_rro_enabled := true
+    endif
+  else ifneq (,$(filter $(LOCAL_PACKAGE_NAME), $(PRODUCT_ENFORCE_RRO_TARGETS)))
     enforce_rro_enabled := true
   endif
-else ifneq (,$(filter $(LOCAL_PACKAGE_NAME), $(PRODUCT_ENFORCE_RRO_TARGETS)))
-  enforce_rro_enabled := true
 endif
-
-# TODO(b/150820813) Some modules depend on static overlay, remove this after eliminating the dependency.
-ifneq (,$(filter $(LOCAL_PACKAGE_NAME), $(PRODUCT_ENFORCE_RRO_EXEMPTED_TARGETS)))
-  enforce_rro_enabled :=
-endif
-
 
 product_package_overlays := $(strip \
     $(wildcard $(foreach dir, $(PRODUCT_PACKAGE_OVERLAYS), \
@@ -196,10 +203,10 @@ my_res_resources := $(if $(my_res_dir),$(strip \
 all_resources := $(strip $(my_res_resources) $(my_overlay_resources))
 
 # The linked resource package.
-my_res_package := $(intermediates)/package-res.apk
+my_res_package := $(intermediates.COMMON)/package-res.apk
 LOCAL_INTERMEDIATE_TARGETS += $(my_res_package)
 
-my_bundle_module := $(intermediates)/base.zip
+my_bundle_module := $(intermediates.COMMON)/base.zip
 LOCAL_INTERMEDIATE_TARGETS += $(my_bundle_module)
 
 # Always run aapt2, because we need to at least compile the AndroidManifest.xml.
@@ -476,33 +483,10 @@ $(LOCAL_BUILT_MODULE): PRIVATE_ADDITIONAL_CERTIFICATES := $(additional_certifica
 $(LOCAL_BUILT_MODULE): $(LOCAL_CERTIFICATE_LINEAGE)
 $(LOCAL_BUILT_MODULE): PRIVATE_CERTIFICATE_LINEAGE := $(LOCAL_CERTIFICATE_LINEAGE)
 
+$(LOCAL_BUILT_MODULE): PRIVATE_ROTATION_MIN_SDK_VERSION := $(LOCAL_ROTATION_MIN_SDK_VERSION)
+
 # Set a actual_partition_tag (calculated in base_rules.mk) for the package.
 PACKAGES.$(LOCAL_PACKAGE_NAME).PARTITION := $(actual_partition_tag)
-
-# Verify LOCAL_USES_LIBRARIES/LOCAL_OPTIONAL_USES_LIBRARIES
-# If LOCAL_ENFORCE_USES_LIBRARIES is not set, default to true if either of LOCAL_USES_LIBRARIES or
-# LOCAL_OPTIONAL_USES_LIBRARIES are specified.
-# Will change the default to true unconditionally in the future.
-ifndef LOCAL_ENFORCE_USES_LIBRARIES
-  ifneq (,$(strip $(LOCAL_USES_LIBRARIES)$(LOCAL_OPTIONAL_USES_LIBRARIES)))
-    LOCAL_ENFORCE_USES_LIBRARIES := true
-  endif
-endif
-
-my_enforced_uses_libraries :=
-ifdef LOCAL_ENFORCE_USES_LIBRARIES
-  my_manifest_check := $(intermediates.COMMON)/manifest/AndroidManifest.xml.check
-  $(my_manifest_check): $(MANIFEST_CHECK)
-  $(my_manifest_check): PRIVATE_USES_LIBRARIES := $(LOCAL_USES_LIBRARIES)
-  $(my_manifest_check): PRIVATE_OPTIONAL_USES_LIBRARIES := $(LOCAL_OPTIONAL_USES_LIBRARIES)
-  $(my_manifest_check): $(full_android_manifest)
-	@echo Checking manifest: $<
-	$(MANIFEST_CHECK) --enforce-uses-libraries \
-	  $(addprefix --uses-library ,$(PRIVATE_USES_LIBRARIES)) \
-	  $(addprefix --optional-uses-library ,$(PRIVATE_OPTIONAL_USES_LIBRARIES)) \
-	  $< -o $@
-  $(LOCAL_BUILT_MODULE): $(my_manifest_check)
-endif
 
 # Define the rule to build the actual package.
 # PRIVATE_JNI_SHARED_LIBRARIES is a list of <abi>:<path_of_built_lib>.
@@ -547,10 +531,14 @@ $(LOCAL_BUILT_MODULE) : $(JAR_ARGS) $(SOONG_ZIP) $(MERGE_ZIPS) $(ZIP2ZIP)
 $(LOCAL_BUILT_MODULE): PRIVATE_RES_PACKAGE := $(my_res_package)
 $(LOCAL_BUILT_MODULE) : $(my_res_package) $(AAPT2)
 ifdef LOCAL_COMPRESSED_MODULE
-$(LOCAL_BUILT_MODULE) : $(MINIGZIP)
+$(LOCAL_BUILT_MODULE) : $(GZIP)
 endif
 ifeq (true, $(LOCAL_UNCOMPRESS_DEX))
 $(LOCAL_BUILT_MODULE) : $(ZIP2ZIP)
+endif
+ifeq ($(full_classes_jar),)
+  # We don't build jar, need to add the Java resources here.
+  $(LOCAL_BUILT_MODULE): $(java_resource_sources)
 endif
 $(LOCAL_BUILT_MODULE): PRIVATE_USE_EMBEDDED_NATIVE_LIBS := $(LOCAL_USE_EMBEDDED_NATIVE_LIBS)
 $(LOCAL_BUILT_MODULE):
@@ -584,7 +572,7 @@ ifdef LOCAL_COMPRESSED_MODULE
 	$(compress-package)
 endif  # LOCAL_COMPRESSED_MODULE
 
-my_package_res_pb := $(intermediates)/package-res.pb.apk
+my_package_res_pb := $(intermediates.COMMON)/package-res.pb.apk
 $(my_package_res_pb): $(my_res_package) $(AAPT2)
 	$(AAPT2) convert --output-format proto $< -o $@
 
@@ -603,6 +591,8 @@ ifneq ($(full_classes_jar),)
 else
   $(my_bundle_module): PRIVATE_DEX_FILE :=
   $(my_bundle_module): PRIVATE_SOURCE_ARCHIVE :=
+  # We don't build jar, need to add the Java resources here.
+  $(my_bundle_module): $(java_resource_sources)
 endif # full_classes_jar
 
 $(my_bundle_module): $(MERGE_ZIPS) $(SOONG_ZIP) $(ZIP2ZIP)
@@ -741,3 +731,5 @@ ifneq (,$(runtime_resource_overlays_product)$(runtime_resource_overlays_vendor))
     )
   endif
 endif
+
+$(if $(my_register_name),$(eval ALL_MODULES.$(my_register_name).MAKE_MODULE_TYPE:=PACKAGE))

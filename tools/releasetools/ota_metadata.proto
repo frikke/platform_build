@@ -16,13 +16,15 @@
 
 // If you change this file,
 // Please update ota_metadata_pb2.py by executing
-// protoc ota_metadata.proto --python_out $ANDROID_BUILD_TOP/build/tools/releasetools
-
+// protoc ota_metadata.proto --python_out
+// $ANDROID_BUILD_TOP/build/tools/releasetools
 
 syntax = "proto3";
 
 package build.tools.releasetools;
 option optimize_for = LITE_RUNTIME;
+option java_package = "android.ota";
+option java_outer_classname = "OtaPackageMetadata";
 
 // The build information of a particular partition on the device.
 message PartitionState {
@@ -65,6 +67,21 @@ message DeviceState {
   repeated PartitionState partition_state = 7;
 }
 
+message ApexInfo {
+  string package_name = 1;
+  int64 version = 2;
+  bool is_compressed = 3;
+  int64 decompressed_size = 4;
+  // Used in OTA
+  int64 source_version = 5;
+}
+
+// Just a container to hold repeated apex_info, so that we can easily serialize
+// a list of apex_info to string.
+message ApexMetadata {
+  repeated ApexInfo apex_info = 1;
+}
+
 // The metadata of an OTA package. It contains the information of the package
 // and prerequisite to install the update correctly.
 message OtaMetadata {
@@ -92,4 +109,7 @@ message OtaMetadata {
   bool retrofit_dynamic_partitions = 7;
   // The required size of the cache partition, only valid for non-A/B update.
   int64 required_cache = 8;
+
+  // True iff security patch level downgrade is permitted on this OTA.
+  bool spl_downgrade = 9;
 }

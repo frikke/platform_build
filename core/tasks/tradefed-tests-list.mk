@@ -15,9 +15,22 @@
 # List all TradeFed tests from COMPATIBILITY.tradefed_tests_dir
 .PHONY: tradefed-tests-list
 
+COMPATIBILITY.tradefed_tests_dir := \
+  $(COMPATIBILITY.tradefed_tests_dir) \
+  tools/tradefederation/core/res/config \
+  tools/tradefederation/core/javatests/res/config \
+  vendor/google_tradefederation/contrib/res/config \
+  vendor/google_tradefederation/core/res/config \
+  vendor/google_tradefederation/core/javatests/res/config \
+  vendor/google_tradefederation/core/prod_tests/res/config
+
 tradefed_tests :=
 $(foreach dir, $(COMPATIBILITY.tradefed_tests_dir), \
-  $(eval tradefed_tests += $(shell find $(dir) -type f -name "*.xml")))
+  $(if $(wildcard $(dir)/*), \
+    $(eval tradefed_tests += $(shell find $(dir) -type f -name "*.xml")) \
+  ) \
+)
+
 tradefed_tests_list_intermediates := $(call intermediates-dir-for,PACKAGING,tradefed_tests_list,HOST,COMMON)
 tradefed_tests_list_zip := $(tradefed_tests_list_intermediates)/tradefed-tests_list.zip
 all_tests :=
@@ -34,5 +47,7 @@ $(tradefed_tests_list_zip) : $(tradefed_tests) $(SOONG_ZIP)
 
 tradefed-tests-list : $(tradefed_tests_list_zip)
 $(call dist-for-goals, tradefed-tests-list, $(tradefed_tests_list_zip))
+
+$(call declare-1p-target,$(tradefed_tests_list_zip),)
 
 tests: tradefed-tests-list

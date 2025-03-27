@@ -22,8 +22,8 @@ import zipfile
 import common
 import test_utils
 from sign_target_files_apks import (
-    CheckApkAndApexKeysAvailable, EditTags, GetApkFileInfo, ReadApexKeysInfo,
-    ReplaceCerts, ReplaceVerityKeyId, RewriteAvbProps, RewriteProps,
+    CheckApkAndApexKeysAvailable, EditTags, GetApkFileInfo, ParseAvbInfo,
+    ReadApexKeysInfo, ReplaceCerts, RewriteAvbProps, RewriteProps,
     WriteOtacerts)
 
 
@@ -62,6 +62,9 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
       'avb_boot_add_hash_footer_args':
           ('--prop com.android.build.boot.os_version:R '
            '--prop com.android.build.boot.security_patch:2019-09-05'),
+      'avb_init_boot_add_hash_footer_args':
+          ('--prop com.android.build.boot.os_version:R '
+           '--prop com.android.build.boot.security_patch:2019-09-05'),
       'avb_system_add_hashtree_footer_args':
           ('--prop com.android.build.system.os_version:R '
            '--prop com.android.build.system.security_patch:2019-09-05 '
@@ -75,6 +78,9 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     }
     expected_dict = {
       'avb_boot_add_hash_footer_args':
+          ('--prop com.android.build.boot.os_version:R '
+           '--prop com.android.build.boot.security_patch:2019-09-05'),
+      'avb_init_boot_add_hash_footer_args':
           ('--prop com.android.build.boot.os_version:R '
            '--prop com.android.build.boot.security_patch:2019-09-05'),
       'avb_system_add_hashtree_footer_args':
@@ -147,64 +153,6 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual(
         '\n'.join([prop[1] for prop in props]) + '\n',
         RewriteProps('\n'.join([prop[0] for prop in props])))
-
-  def test_ReplaceVerityKeyId(self):
-    BOOT_CMDLINE1 = (
-        "console=ttyHSL0,115200,n8 androidboot.console=ttyHSL0 "
-        "androidboot.hardware=marlin user_debug=31 ehci-hcd.park=3 "
-        "lpm_levels.sleep_disabled=1 cma=32M@0-0xffffffff loop.max_part=7 "
-        "buildvariant=userdebug "
-        "veritykeyid=id:7e4333f9bba00adfe0ede979e28ed1920492b40f\n")
-
-    BOOT_CMDLINE2 = (
-        "console=ttyHSL0,115200,n8 androidboot.console=ttyHSL0 "
-        "androidboot.hardware=marlin user_debug=31 ehci-hcd.park=3 "
-        "lpm_levels.sleep_disabled=1 cma=32M@0-0xffffffff loop.max_part=7 "
-        "buildvariant=userdebug "
-        "veritykeyid=id:d24f2590e9abab5cff5f59da4c4f0366e3f43e94\n")
-
-    input_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(input_file, 'w', allowZip64=True) as input_zip:
-      input_zip.writestr('BOOT/cmdline', BOOT_CMDLINE1)
-
-    # Test with the first certificate.
-    cert_file = os.path.join(self.testdata_dir, 'verity.x509.pem')
-
-    output_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(input_file, 'r', allowZip64=True) as input_zip, \
-         zipfile.ZipFile(output_file, 'w', allowZip64=True) as output_zip:
-      ReplaceVerityKeyId(input_zip, output_zip, cert_file)
-
-    with zipfile.ZipFile(output_file) as output_zip:
-      self.assertEqual(BOOT_CMDLINE1, output_zip.read('BOOT/cmdline').decode())
-
-    # Test with the second certificate.
-    cert_file = os.path.join(self.testdata_dir, 'testkey.x509.pem')
-
-    with zipfile.ZipFile(input_file, 'r', allowZip64=True) as input_zip, \
-         zipfile.ZipFile(output_file, 'w', allowZip64=True) as output_zip:
-      ReplaceVerityKeyId(input_zip, output_zip, cert_file)
-
-    with zipfile.ZipFile(output_file) as output_zip:
-      self.assertEqual(BOOT_CMDLINE2, output_zip.read('BOOT/cmdline').decode())
-
-  def test_ReplaceVerityKeyId_no_veritykeyid(self):
-    BOOT_CMDLINE = (
-        "console=ttyHSL0,115200,n8 androidboot.hardware=bullhead boot_cpus=0-5 "
-        "lpm_levels.sleep_disabled=1 msm_poweroff.download_mode=0 "
-        "loop.max_part=7\n")
-
-    input_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(input_file, 'w', allowZip64=True) as input_zip:
-      input_zip.writestr('BOOT/cmdline', BOOT_CMDLINE)
-
-    output_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(input_file, 'r', allowZip64=True) as input_zip, \
-         zipfile.ZipFile(output_file, 'w', allowZip64=True) as output_zip:
-      ReplaceVerityKeyId(input_zip, output_zip, None)
-
-    with zipfile.ZipFile(output_file) as output_zip:
-      self.assertEqual(BOOT_CMDLINE, output_zip.read('BOOT/cmdline').decode())
 
   def test_ReplaceCerts(self):
     cert1_path = os.path.join(self.testdata_dir, 'platform.x509.pem')
@@ -328,23 +276,23 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
         'Apex3.apex' : 'key3',
     }
     apex_keys = {
-        'Apex1.apex' : ('payload-key1', 'container-key1'),
-        'Apex2.apex' : ('payload-key2', 'container-key2'),
+        'Apex1.apex' : ('payload-key1', 'container-key1', None),
+        'Apex2.apex' : ('payload-key2', 'container-key2', None),
     }
     with zipfile.ZipFile(input_file) as input_zip:
       CheckApkAndApexKeysAvailable(input_zip, apk_key_map, None, apex_keys)
 
       # Fine to have both keys as PRESIGNED.
-      apex_keys['Apex2.apex'] = ('PRESIGNED', 'PRESIGNED')
+      apex_keys['Apex2.apex'] = ('PRESIGNED', 'PRESIGNED', None)
       CheckApkAndApexKeysAvailable(input_zip, apk_key_map, None, apex_keys)
 
       # Having only one of them as PRESIGNED is not allowed.
-      apex_keys['Apex2.apex'] = ('payload-key2', 'PRESIGNED')
+      apex_keys['Apex2.apex'] = ('payload-key2', 'PRESIGNED', None)
       self.assertRaises(
           AssertionError, CheckApkAndApexKeysAvailable, input_zip, apk_key_map,
           None, apex_keys)
 
-      apex_keys['Apex2.apex'] = ('PRESIGNED', 'container-key1')
+      apex_keys['Apex2.apex'] = ('PRESIGNED', 'container-key1', None)
       self.assertRaises(
           AssertionError, CheckApkAndApexKeysAvailable, input_zip, apk_key_map,
           None, apex_keys)
@@ -475,10 +423,10 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual({
         'apex.apexd_test.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         'apex.apexd_test_different_app.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package_2.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         }, keys_info)
 
   def test_ReadApexKeysInfo_mismatchingContainerKeys(self):
@@ -514,10 +462,10 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual({
         'apex.apexd_test.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         'apex.apexd_test_different_app.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package_2.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         }, keys_info)
 
   def test_ReadApexKeysInfo_missingPayloadPublicKey(self):
@@ -537,10 +485,10 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual({
         'apex.apexd_test.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         'apex.apexd_test_different_app.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package_2.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         }, keys_info)
 
   def test_ReadApexKeysInfo_presignedKeys(self):
@@ -560,10 +508,10 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual({
         'apex.apexd_test.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         'apex.apexd_test_different_app.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package_2.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         }, keys_info)
 
   def test_ReadApexKeysInfo_presignedKeys(self):
@@ -583,8 +531,91 @@ name="apex.apexd_test_different_app.apex" public_key="system/apex/apexd/apexd_te
     self.assertEqual({
         'apex.apexd_test.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         'apex.apexd_test_different_app.apex': (
             'system/apex/apexd/apexd_testdata/com.android.apex.test_package_2.pem',
-            'build/make/target/product/security/testkey'),
+            'build/make/target/product/security/testkey', None),
         }, keys_info)
+
+  def test_ParseAvbInfo(self):
+    avb_info_string = """
+    Footer version:           1.0
+    Image size:               9999999 bytes
+    Original image size:      8888888 bytes
+    VBMeta offset:            7777777
+    VBMeta size:              1111 bytes
+    --
+    Minimum libavb version:   1.0
+    Header Block:             222 bytes
+    Authentication Block:     333 bytes
+    Auxiliary Block:          888 bytes
+    Public key (sha1):        abababababababababababababababababababab
+    Algorithm:                SHA256_RSA2048
+    Rollback Index:           0
+    Flags:                    0
+    Rollback Index Location:  0
+    Release String:           'avbtool 1.3.0'
+    Descriptors:
+        Hashtree descriptor:
+          Version of dm-verity:  1
+          Image Size:            8888888 bytes
+          Tree Offset:           8888888
+          Tree Size:             44444 bytes
+          Data Block Size:       4444 bytes
+          Hash Block Size:       4444 bytes
+          FEC num roots:         0
+          FEC offset:            0
+          FEC size:              0 bytes
+          Hash Algorithm:        sha1
+          Partition Name:        partition-name
+          Salt:                  cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd
+          Root Digest:           efefefefefefefefefefefefefefefefefef
+          Flags:                 0
+        Prop: prop.key -> 'prop.value'
+    """
+
+    self.assertEqual(
+        {
+            'Footer version': '1.0',
+            'Image size': '9999999 bytes',
+            'Original image size': '8888888 bytes',
+            'VBMeta offset': '7777777',
+            'VBMeta size': '1111 bytes',
+            'Minimum libavb version': '1.0',
+            'Header Block': '222 bytes',
+            'Authentication Block': '333 bytes',
+            'Auxiliary Block': '888 bytes',
+            'Public key (sha1)': 'abababababababababababababababababababab',
+            'Algorithm': 'SHA256_RSA2048',
+            'Rollback Index': '0',
+            'Flags': '0',
+            'Rollback Index Location': '0',
+            'Release String': "'avbtool 1.3.0'",
+            'Descriptors': [
+                {
+                    'Hashtree descriptor': {
+                        'Version of dm-verity': '1',
+                        'Image Size': '8888888 bytes',
+                        'Tree Offset': '8888888',
+                        'Tree Size': '44444 bytes',
+                        'Data Block Size': '4444 bytes',
+                        'Hash Block Size': '4444 bytes',
+                        'FEC num roots': '0',
+                        'FEC offset': '0',
+                        'FEC size': '0 bytes',
+                        'Hash Algorithm': 'sha1',
+                        'Partition Name': 'partition-name',
+                        'Salt': 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+                        'Root Digest': 'efefefefefefefefefefefefefefefefefef',
+                        'Flags': '0',
+                    }
+                },
+                {
+                    'Prop': {
+                        'prop.key': 'prop.value',
+                    }
+                },
+            ],
+        },
+        ParseAvbInfo(avb_info_string),
+    )

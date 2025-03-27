@@ -64,12 +64,19 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.NoSuchAlgorithmException;
 import java.security.Key;
 import java.security.KeyFactory;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.KeyStore.PrivateKeyEntry;
 import java.security.PrivateKey;
 import java.security.Provider;
 import java.security.Security;
+import java.security.UnrecoverableEntryException;
+import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateEncodingException;
+import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.InvalidKeySpecException;
@@ -197,26 +204,23 @@ class SignApk {
      * If a console doesn't exist, reads the password from stdin
      * If a console exists, reads the password from console and returns it as a string.
      *
-     * @param keyFile The file containing the private key.  Used to prompt the user.
+     * @param keyFileName Name of the file containing the private key.  Used to prompt the user.
      */
-    private static String readPassword(File keyFile) {
+    private static char[] readPassword(String keyFileName) {
         Console console;
-        char[] pwd;
         if ((console = System.console()) == null) {
-            System.out.print("Enter password for " + keyFile + " (password will not be hidden): ");
+            System.out.print(
+                "Enter password for " + keyFileName + " (password will not be hidden): ");
             System.out.flush();
             BufferedReader stdin = new BufferedReader(new InputStreamReader(System.in));
             try {
-                return stdin.readLine();
+                String result = stdin.readLine();
+                return result == null ? null : result.toCharArray();
             } catch (IOException ex) {
                 return null;
             }
         } else {
-            if ((pwd = console.readPassword("[%s]", "Enter password for " + keyFile)) != null) {
-                return String.valueOf(pwd);
-            } else {
-                return null;
-            }
+            return console.readPassword("[%s]", "Enter password for " + keyFileName);
         }
     }
 
@@ -239,11 +243,8 @@ class SignApk {
             return null;
         }
 
-        char[] password = readPassword(keyFile).toCharArray();
-
         SecretKeyFactory skFactory = SecretKeyFactory.getInstance(epkInfo.getAlgName());
-        Key key = skFactory.generateSecret(new PBEKeySpec(password));
-
+        Key key = skFactory.generateSecret(new PBEKeySpec(readPassword(keyFile.getPath())));
         Cipher cipher = Cipher.getInstance(epkInfo.getAlgName());
         cipher.init(Cipher.DECRYPT_MODE, key, epkInfo.getAlgParameters());
 
@@ -284,6 +285,31 @@ class SignApk {
         } finally {
             input.close();
         }
+    }
+
+    private static KeyStore createKeyStore(String keyStoreName, String keyStorePin) throws
+            CertificateException,
+            IOException,
+            KeyStoreException,
+            NoSuchAlgorithmException {
+        KeyStore keyStore = KeyStore.getInstance(keyStoreName);
+        keyStore.load(null, keyStorePin == null ? null : keyStorePin.toCharArray());
+        return keyStore;
+    }
+
+    /** Get a PKCS#11 private key from keyStore */
+    private static PrivateKey loadPrivateKeyFromKeyStore(
+            final KeyStore keyStore, final String keyName)
+            throws CertificateException, KeyStoreException, NoSuchAlgorithmException,
+                    UnrecoverableKeyException, UnrecoverableEntryException {
+        final PrivateKeyEntry privateKeyEntry = (PrivateKeyEntry) keyStore.getEntry(keyName, null);
+        if (privateKeyEntry == null) {
+        throw new Error(
+            "Key "
+                + keyName
+                + " not found in the token provided by PKCS11 library!");
+        }
+        return privateKeyEntry.getPrivateKey();
     }
 
     /**
@@ -660,7 +686,7 @@ class SignApk {
         if (entryName.endsWith(".so")) {
             // Align .so contents to memory page boundary to enable memory-mapped
             // execution.
-            return 4096;
+            return 16384;
         } else {
             return defaultAlignment;
         }
@@ -874,7 +900,7 @@ class SignApk {
      * Tries to load a JSE Provider by class name. This is for custom PrivateKey
      * types that might be stored in PKCS#11-like storage.
      */
-    private static void loadProviderIfNecessary(String providerClassName) {
+    private static void loadProviderIfNecessary(String providerClassName, String providerArg) {
         if (providerClassName == null) {
             return;
         }
@@ -893,27 +919,41 @@ class SignApk {
             return;
         }
 
-        Constructor<?> constructor = null;
-        for (Constructor<?> c : klass.getConstructors()) {
-            if (c.getParameterTypes().length == 0) {
-                constructor = c;
-                break;
+        Constructor<?> constructor;
+        Object o = null;
+        if (providerArg == null) {
+            try {
+                constructor = klass.getConstructor();
+                o = constructor.newInstance();
+            } catch (ReflectiveOperationException e) {
+                e.printStackTrace();
+                System.err.println("Unable to instantiate " + providerClassName
+                        + " with a zero-arg constructor");
+                System.exit(1);
+            }
+        } else {
+            try {
+                constructor = klass.getConstructor(String.class);
+                o = constructor.newInstance(providerArg);
+            } catch (ReflectiveOperationException e) {
+                // This is expected from JDK 9+; the single-arg constructor accepting the
+                // configuration has been replaced with a configure(String) method to be invoked
+                // after instantiating the Provider with the zero-arg constructor.
+                try {
+                    constructor = klass.getConstructor();
+                    o = constructor.newInstance();
+                    // The configure method will return either the modified Provider or a new
+                    // Provider if this one cannot be configured in-place.
+                    o = klass.getMethod("configure", String.class).invoke(o, providerArg);
+                } catch (ReflectiveOperationException roe) {
+                    roe.printStackTrace();
+                    System.err.println("Unable to instantiate " + providerClassName
+                            + " with the provided argument " + providerArg);
+                    System.exit(1);
+                }
             }
         }
-        if (constructor == null) {
-            System.err.println("No zero-arg constructor found for " + providerClassName);
-            System.exit(1);
-            return;
-        }
 
-        final Object o;
-        try {
-            o = constructor.newInstance();
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
-            return;
-        }
         if (!(o instanceof Provider)) {
             System.err.println("Not a Provider class: " + providerClassName);
             System.exit(1);
@@ -945,15 +985,17 @@ class SignApk {
     }
 
     private static class ZipSections {
-        ByteBuffer beforeCentralDir;
+        DataSource beforeCentralDir;
+
+        // The following fields are still valid after closing the backing DataSource.
+        long beforeCentralDirSize;
         ByteBuffer centralDir;
         ByteBuffer eocd;
     }
 
-    private static ZipSections findMainZipSections(ByteBuffer apk)
+    private static ZipSections findMainZipSections(DataSource apk)
             throws IOException, ZipFormatException {
-        apk.slice();
-        ApkUtils.ZipSections sections = ApkUtils.findZipSections(DataSources.asDataSource(apk));
+        ApkUtils.ZipSections sections = ApkUtils.findZipSections(apk);
         long centralDirStartOffset = sections.getZipCentralDirectoryOffset();
         long centralDirSizeBytes = sections.getZipCentralDirectorySizeBytes();
         long centralDirEndOffset = centralDirStartOffset + centralDirSizeBytes;
@@ -964,25 +1006,20 @@ class SignApk {
                             + ". CD end: " + centralDirEndOffset
                             + ", EoCD start: " + eocdStartOffset);
         }
-        apk.position(0);
-        apk.limit((int) centralDirStartOffset);
-        ByteBuffer beforeCentralDir = apk.slice();
-
-        apk.position((int) centralDirStartOffset);
-        apk.limit((int) centralDirEndOffset);
-        ByteBuffer centralDir = apk.slice();
-
-        apk.position((int) eocdStartOffset);
-        apk.limit(apk.capacity());
-        ByteBuffer eocd = apk.slice();
-
-        apk.position(0);
-        apk.limit(apk.capacity());
 
         ZipSections result = new ZipSections();
-        result.beforeCentralDir = beforeCentralDir;
-        result.centralDir = centralDir;
-        result.eocd = eocd;
+
+        result.beforeCentralDir = apk.slice(0, centralDirStartOffset);
+        result.beforeCentralDirSize = result.beforeCentralDir.size();
+
+        long centralDirSize = centralDirEndOffset - centralDirStartOffset;
+        if (centralDirSize >= Integer.MAX_VALUE) throw new IndexOutOfBoundsException();
+        result.centralDir = apk.getByteBuffer(centralDirStartOffset, (int)centralDirSize);
+
+        long eocdSize = apk.size() - eocdStartOffset;
+        if (eocdSize >= Integer.MAX_VALUE) throw new IndexOutOfBoundsException();
+        result.eocd = apk.getByteBuffer(eocdStartOffset, (int)eocdSize);
+
         return result;
     }
 
@@ -1020,7 +1057,11 @@ class SignApk {
     private static void usage() {
         System.err.println("Usage: signapk [-w] " +
                            "[-a <alignment>] " +
+                           "[--align-file-size] " +
                            "[-providerClass <className>] " +
+                           "[-providerArg <configureArg>] " +
+                           "[-loadPrivateKeysFromKeyStore <keyStoreName>]" +
+                           "[-keyStorePin <pin>]" +
                            "[--min-sdk-version <n>] " +
                            "[--disable-v2] " +
                            "[--enable-v4] " +
@@ -1043,11 +1084,16 @@ class SignApk {
 
         boolean signWholeFile = false;
         String providerClass = null;
+        String providerArg = null;
+        String keyStoreName = null;
+        String keyStorePin = null;
         int alignment = 4;
+        boolean alignFileSize = false;
         Integer minSdkVersionOverride = null;
         boolean signUsingApkSignatureSchemeV2 = true;
         boolean signUsingApkSignatureSchemeV4 = false;
         SigningCertificateLineage certLineage = null;
+        Integer rotationMinSdkVersion = null;
 
         int argstart = 0;
         while (argstart < args.length && args[argstart].startsWith("-")) {
@@ -1060,8 +1106,29 @@ class SignApk {
                 }
                 providerClass = args[++argstart];
                 ++argstart;
+            } else if("-providerArg".equals(args[argstart])) {
+                if (argstart + 1 >= args.length) {
+                    usage();
+                }
+                providerArg = args[++argstart];
+                ++argstart;
+            } else if ("-loadPrivateKeysFromKeyStore".equals(args[argstart])) {
+                if (argstart + 1 >= args.length) {
+                    usage();
+                }
+                keyStoreName = args[++argstart];
+                ++argstart;
+            } else if ("-keyStorePin".equals(args[argstart])) {
+                if (argstart + 1 >= args.length) {
+                    usage();
+                }
+                keyStorePin = args[++argstart];
+                ++argstart;
             } else if ("-a".equals(args[argstart])) {
                 alignment = Integer.parseInt(args[++argstart]);
+                ++argstart;
+            } else if ("--align-file-size".equals(args[argstart])) {
+                alignFileSize = true;
                 ++argstart;
             } else if ("--min-sdk-version".equals(args[argstart])) {
                 String minSdkVersionString = args[++argstart];
@@ -1087,6 +1154,15 @@ class SignApk {
                             "Error reading lineage file: " + e.getMessage());
                 }
                 ++argstart;
+            } else if ("--rotation-min-sdk-version".equals(args[argstart])) {
+                String rotationMinSdkVersionString = args[++argstart];
+                try {
+                    rotationMinSdkVersion = Integer.parseInt(rotationMinSdkVersionString);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            "--rotation-min-sdk-version must be a decimal number: " + rotationMinSdkVersionString);
+                }
+                ++argstart;
             } else {
                 usage();
             }
@@ -1105,7 +1181,7 @@ class SignApk {
             System.exit(2);
         }
 
-        loadProviderIfNecessary(providerClass);
+        loadProviderIfNecessary(providerClass, providerArg);
 
         String inputFilename = args[numArgsExcludeV4FilePath - 2];
         String outputFilename = args[numArgsExcludeV4FilePath - 1];
@@ -1137,11 +1213,19 @@ class SignApk {
             // timestamp using the current timezone. We thus adjust the milliseconds since epoch
             // value to end up with MS-DOS timestamp of Jan 1 2009 00:00:00.
             timestamp -= TimeZone.getDefault().getOffset(timestamp);
-
+            KeyStore keyStore = null;
+            if (keyStoreName != null) {
+                keyStore = createKeyStore(keyStoreName, keyStorePin);
+            }
             PrivateKey[] privateKey = new PrivateKey[numKeys];
             for (int i = 0; i < numKeys; ++i) {
                 int argNum = argstart + i*2 + 1;
-                privateKey[i] = readPrivateKey(new File(args[argNum]));
+                if (keyStore == null) {
+                    privateKey[i] = readPrivateKey(new File(args[argNum]));
+                } else {
+                    final String keyAlias = args[argNum];
+                    privateKey[i] = loadPrivateKeyFromKeyStore(keyStore, keyAlias);
+                }
             }
             inputJar = new JarFile(new File(inputFilename), false);  // Don't verify.
 
@@ -1170,24 +1254,28 @@ class SignApk {
                     }
                 }
 
-                try (ApkSignerEngine apkSigner =
-                        new DefaultApkSignerEngine.Builder(
-                                createSignerConfigs(privateKey, publicKey), minSdkVersion)
-                                .setV1SigningEnabled(true)
-                                .setV2SigningEnabled(signUsingApkSignatureSchemeV2)
-                                .setOtherSignersSignaturesPreserved(false)
-                                .setCreatedBy("1.0 (Android SignApk)")
-                                .setSigningCertificateLineage(certLineage)
-                                .build()) {
+                DefaultApkSignerEngine.Builder builder = new DefaultApkSignerEngine.Builder(
+                    createSignerConfigs(privateKey, publicKey), minSdkVersion)
+                    .setV1SigningEnabled(true)
+                    .setV2SigningEnabled(signUsingApkSignatureSchemeV2)
+                    .setOtherSignersSignaturesPreserved(false)
+                    .setCreatedBy("1.0 (Android SignApk)");
+
+                if (certLineage != null) {
+                   builder = builder.setSigningCertificateLineage(certLineage);
+                }
+
+                if (rotationMinSdkVersion != null) {
+                   builder = builder.setMinSdkVersionForRotation(rotationMinSdkVersion);
+                }
+
+                try (ApkSignerEngine apkSigner = builder.build()) {
                     // We don't preserve the input APK's APK Signing Block (which contains v2
                     // signatures)
                     apkSigner.inputApkSigningBlock(null);
 
-                    // Build the output APK in memory, by copying input APK's ZIP entries across
-                    // and then signing the output APK.
-                    ByteArrayOutputStream v1SignedApkBuf = new ByteArrayOutputStream();
                     CountingOutputStream outputJarCounter =
-                            new CountingOutputStream(v1SignedApkBuf);
+                            new CountingOutputStream(outputFile);
                     JarOutputStream outputJar = new JarOutputStream(outputJarCounter);
                     // Use maximum compression for compressed entries because the APK lives forever
                     // on the system partition.
@@ -1200,18 +1288,35 @@ class SignApk {
                         addV1Signature(apkSigner, addV1SignatureRequest, outputJar, timestamp);
                         addV1SignatureRequest.done();
                     }
-                    outputJar.close();
-                    ByteBuffer v1SignedApk = ByteBuffer.wrap(v1SignedApkBuf.toByteArray());
-                    v1SignedApkBuf.reset();
-                    ByteBuffer[] outputChunks = new ByteBuffer[] {v1SignedApk};
 
-                    ZipSections zipSections = findMainZipSections(v1SignedApk);
-                    ApkSignerEngine.OutputApkSigningBlockRequest2 addV2SignatureRequest =
-                            apkSigner.outputZipSections2(
-                                    DataSources.asDataSource(zipSections.beforeCentralDir),
-                                    DataSources.asDataSource(zipSections.centralDir),
-                                    DataSources.asDataSource(zipSections.eocd));
-                    if (addV2SignatureRequest != null) {
+                    // close output and switch to input mode
+                    outputJar.close();
+                    outputJar = null;
+                    outputJarCounter = null;
+                    outputFile = null;
+                    RandomAccessFile v1SignedApk = new RandomAccessFile(outputFilename, "r");
+
+                    ZipSections zipSections = findMainZipSections(DataSources.asDataSource(
+                            v1SignedApk));
+
+                    ByteBuffer eocd = ByteBuffer.allocate(zipSections.eocd.remaining());
+                    eocd.put(zipSections.eocd);
+                    eocd.flip();
+                    eocd.order(ByteOrder.LITTLE_ENDIAN);
+
+                    ByteBuffer[] outputChunks = new ByteBuffer[] {};
+
+                    // This loop is supposed to be iterated twice at most.
+                    // The second pass is to align the file size after amending EOCD comments
+                    // with assumption that re-generated signing block would be the same size.
+                    while (true) {
+                        ApkSignerEngine.OutputApkSigningBlockRequest2 addV2SignatureRequest =
+                                apkSigner.outputZipSections2(
+                                        zipSections.beforeCentralDir,
+                                        DataSources.asDataSource(zipSections.centralDir),
+                                        DataSources.asDataSource(eocd));
+                        if (addV2SignatureRequest == null) break;
+
                         // Need to insert the returned APK Signing Block before ZIP Central
                         // Directory.
                         int padding = addV2SignatureRequest.getPaddingSizeBeforeApkSigningBlock();
@@ -1219,23 +1324,54 @@ class SignApk {
                         // Because the APK Signing Block is inserted before the Central Directory,
                         // we need to adjust accordingly the offset of Central Directory inside the
                         // ZIP End of Central Directory (EoCD) record.
-                        ByteBuffer modifiedEocd = ByteBuffer.allocate(zipSections.eocd.remaining());
-                        modifiedEocd.put(zipSections.eocd);
+                        ByteBuffer modifiedEocd = ByteBuffer.allocate(eocd.remaining());
+                        modifiedEocd.put(eocd);
                         modifiedEocd.flip();
                         modifiedEocd.order(ByteOrder.LITTLE_ENDIAN);
                         ApkUtils.setZipEocdCentralDirectoryOffset(
                                 modifiedEocd,
-                                zipSections.beforeCentralDir.remaining() + padding +
+                                zipSections.beforeCentralDir.size() + padding +
                                 apkSigningBlock.length);
                         outputChunks =
                                 new ByteBuffer[] {
-                                        zipSections.beforeCentralDir,
                                         ByteBuffer.allocate(padding),
                                         ByteBuffer.wrap(apkSigningBlock),
                                         zipSections.centralDir,
                                         modifiedEocd};
                         addV2SignatureRequest.done();
+
+                        // Exit the loop if we don't need to align the file size
+                        if (!alignFileSize || alignment < 2) {
+                            break;
+                        }
+
+                        // Calculate the file size
+                        eocd = modifiedEocd;
+                        long fileSize = zipSections.beforeCentralDirSize;
+                        for (ByteBuffer buf : outputChunks) {
+                            fileSize += buf.remaining();
+                        }
+                        // Exit the loop because the file size is aligned.
+                        if (fileSize % alignment == 0) {
+                            break;
+                        }
+                        // Pad EOCD comment to align the file size.
+                        int commentLen = alignment - (int)(fileSize % alignment);
+                        modifiedEocd = ByteBuffer.allocate(eocd.remaining() + commentLen);
+                        modifiedEocd.put(eocd);
+                        modifiedEocd.rewind();
+                        modifiedEocd.order(ByteOrder.LITTLE_ENDIAN);
+                        ApkUtils.updateZipEocdCommentLen(modifiedEocd);
+                        // Since V2 signing block should cover modified EOCD,
+                        // re-iterate the loop with modified EOCD.
+                        eocd = modifiedEocd;
                     }
+
+                    // close input and switch back to output mode
+                    v1SignedApk.close();
+                    v1SignedApk = null;
+                    outputFile = new FileOutputStream(outputFilename, true);
+                    outputFile.getChannel().truncate(zipSections.beforeCentralDirSize);
 
                     // This assumes outputChunks are array-backed. To avoid this assumption, the
                     // code could be rewritten to use FileChannel.

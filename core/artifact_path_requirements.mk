@@ -4,6 +4,7 @@
 # Fakes don't get installed, and NDK stubs aren't installed to device.
 static_allowed_patterns := $(TARGET_OUT_FAKE)/% $(SOONG_OUT_DIR)/ndk/%
 # RROs become REQUIRED by the source module, but are always placed on the vendor partition.
+static_allowed_patterns += %__auto_generated_characteristics_rro.apk
 static_allowed_patterns += %__auto_generated_rro_product.apk
 static_allowed_patterns += %__auto_generated_rro_vendor.apk
 # Auto-included targets are not considered
@@ -20,6 +21,10 @@ ifeq (true,$(BOARD_USES_SYSTEM_OTHER_ODEX))
     $(TARGET_OUT_SYSTEM_OTHER)/%.odex \
     $(TARGET_OUT_SYSTEM_OTHER)/%.vdex \
     $(TARGET_OUT_SYSTEM_OTHER)/%.art
+endif
+
+ifneq (,$(filter-out true false relaxed strict,$(PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS))$(filter-out 1 0,$(words $(PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS))))
+  $(error PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS must be one of [true, false, relaxed, strict], found: $(PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS))
 endif
 
 all_offending_files :=
@@ -46,7 +51,7 @@ $(foreach makefile,$(ARTIFACT_PATH_REQUIREMENT_PRODUCTS),\
   $(eval allowed_patterns := $(call resolve-product-relative-paths,$(allowed))) \
   $(eval offending_files := $(filter-out $(allowed_patterns),$(files_in_requirement))) \
   $(eval enforcement := $(PRODUCT_ENFORCE_ARTIFACT_PATH_REQUIREMENTS)) \
-  $(if $(enforcement),\
+  $(if $(filter-out false,$(enforcement)),\
     $(call maybe-print-list-and-error,$(offending_files),\
       $(INTERNAL_PRODUCT) produces files inside $(makefile)s artifact path requirement. \
       $(PRODUCT_ARTIFACT_PATH_REQUIREMENT_HINT)) \

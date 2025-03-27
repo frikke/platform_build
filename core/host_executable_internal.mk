@@ -39,7 +39,24 @@ $(LOCAL_BUILT_MODULE): PRIVATE_RPATHS := ../$(my_libdir) $(my_libdir)
 endif
 my_libdir :=
 
+my_crtbegin :=
+my_crtend :=
+my_libcrt_builtins :=
+ifdef USE_HOST_MUSL
+  my_crtbegin := $(SOONG_$(LOCAL_2ND_ARCH_VAR_PREFIX)HOST_OBJECT_libc_musl_crtbegin_dynamic)
+  my_crtend := $(SOONG_$(LOCAL_2ND_ARCH_VAR_PREFIX)HOST_OBJECT_libc_musl_crtend)
+  my_libcrt_builtins := $($(LOCAL_2ND_ARCH_VAR_PREFIX)$(my_prefix)LIBCRT_BUILTINS)
+  $(LOCAL_BUILT_MODULE): PRIVATE_LDFLAGS += -Wl,--no-dynamic-linker
+endif
+
+$(LOCAL_BUILT_MODULE): PRIVATE_CRTBEGIN := $(my_crtbegin)
+$(LOCAL_BUILT_MODULE): PRIVATE_CRTEND := $(my_crtend)
+$(LOCAL_BUILT_MODULE): PRIVATE_LIBCRT_BUILTINS := $(my_libcrt_builtins)
+$(LOCAL_BUILT_MODULE): $(my_crtbegin) $(my_crtend) $(my_libcrt_builtins)
+
 $(LOCAL_BUILT_MODULE): $(all_objects) $(all_libraries) $(CLANG_CXX)
 	$(transform-host-o-to-executable)
+
+$(if $(my_register_name),$(eval ALL_MODULES.$(my_register_name).MAKE_MODULE_TYPE:=HOST_EXECUTABLE))
 
 endif  # skip_build_from_source

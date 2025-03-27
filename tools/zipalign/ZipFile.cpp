@@ -35,6 +35,8 @@
 #include <assert.h>
 #include <inttypes.h>
 
+_Static_assert(sizeof(off_t) == 8, "off_t too small");
+
 namespace android {
 
 /*
@@ -205,52 +207,43 @@ void ZipFile::discardEntries(void)
  */
 status_t ZipFile::readCentralDir(void)
 {
-    status_t result = OK;
-    uint8_t* buf = NULL;
-    off_t fileLength, seekStart;
-    long readAmount;
-    int i;
-
-    fseek(mZipFp, 0, SEEK_END);
-    fileLength = ftell(mZipFp);
+    fseeko(mZipFp, 0, SEEK_END);
+    off_t fileLength = ftello(mZipFp);
     rewind(mZipFp);
 
     /* too small to be a ZIP archive? */
     if (fileLength < EndOfCentralDir::kEOCDLen) {
-        ALOGD("Length is %ld -- too small\n", (long)fileLength);
-        result = INVALID_OPERATION;
-        goto bail;
+        ALOGD("Length is %lld -- too small\n", (long long) fileLength);
+        return INVALID_OPERATION;
     }
 
-    buf = new uint8_t[EndOfCentralDir::kMaxEOCDSearch];
-    if (buf == NULL) {
-        ALOGD("Failure allocating %d bytes for EOCD search",
-             EndOfCentralDir::kMaxEOCDSearch);
-        result = NO_MEMORY;
-        goto bail;
-    }
-
+    off_t seekStart;
+    size_t readAmount;
     if (fileLength > EndOfCentralDir::kMaxEOCDSearch) {
         seekStart = fileLength - EndOfCentralDir::kMaxEOCDSearch;
         readAmount = EndOfCentralDir::kMaxEOCDSearch;
     } else {
         seekStart = 0;
-        readAmount = (long) fileLength;
+        readAmount = fileLength;
     }
-    if (fseek(mZipFp, seekStart, SEEK_SET) != 0) {
-        ALOGD("Failure seeking to end of zip at %ld", (long) seekStart);
-        result = UNKNOWN_ERROR;
-        goto bail;
+    if (fseeko(mZipFp, seekStart, SEEK_SET) != 0) {
+        ALOGD("Failure seeking to end of zip at %lld", (long long) seekStart);
+        return UNKNOWN_ERROR;
     }
 
     /* read the last part of the file into the buffer */
-    if (fread(buf, 1, readAmount, mZipFp) != (size_t) readAmount) {
-        ALOGD("short file? wanted %ld\n", readAmount);
-        result = UNKNOWN_ERROR;
-        goto bail;
+    uint8_t buf[EndOfCentralDir::kMaxEOCDSearch];
+    if (fread(buf, 1, readAmount, mZipFp) != readAmount) {
+        if (feof(mZipFp)) {
+            ALOGW("fread %zu bytes failed, unexpected EOF", readAmount);
+        } else {
+            ALOGW("fread %zu bytes failed, %s", readAmount, strerror(errno));
+        }
+        return UNKNOWN_ERROR;
     }
 
     /* find the end-of-central-dir magic */
+    int i;
     for (i = readAmount - 4; i >= 0; i--) {
         if (buf[i] == 0x50 &&
             ZipEntry::getLongLE(&buf[i]) == EndOfCentralDir::kSignature)
@@ -261,15 +254,14 @@ status_t ZipFile::readCentralDir(void)
     }
     if (i < 0) {
         ALOGD("EOCD not found, not Zip\n");
-        result = INVALID_OPERATION;
-        goto bail;
+        return INVALID_OPERATION;
     }
 
     /* extract eocd values */
-    result = mEOCD.readBuf(buf + i, readAmount - i);
+    status_t result = mEOCD.readBuf(buf + i, readAmount - i);
     if (result != OK) {
-        ALOGD("Failure reading %ld bytes of EOCD values", readAmount - i);
-        goto bail;
+        ALOGD("Failure reading %zu bytes of EOCD values", readAmount - i);
+        return result;
     }
     //mEOCD.dump();
 
@@ -277,8 +269,7 @@ status_t ZipFile::readCentralDir(void)
         mEOCD.mNumEntries != mEOCD.mTotalNumEntries)
     {
         ALOGD("Archive spanning not supported\n");
-        result = INVALID_OPERATION;
-        goto bail;
+        return INVALID_OPERATION;
     }
 
     /*
@@ -295,11 +286,10 @@ status_t ZipFile::readCentralDir(void)
      * The only thing we really need right now is the file comment, which
      * we're hoping to preserve.
      */
-    if (fseek(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
         ALOGD("Failure seeking to central dir offset %" PRIu32 "\n",
              mEOCD.mCentralDirOffset);
-        result = UNKNOWN_ERROR;
-        goto bail;
+        return UNKNOWN_ERROR;
     }
 
     /*
@@ -314,7 +304,7 @@ status_t ZipFile::readCentralDir(void)
         if (result != OK) {
             ALOGD("initFromCDE failed\n");
             delete pEntry;
-            goto bail;
+            return result;
         }
 
         mEntries.add(pEntry);
@@ -327,21 +317,21 @@ status_t ZipFile::readCentralDir(void)
     {
         uint8_t checkBuf[4];
         if (fread(checkBuf, 1, 4, mZipFp) != 4) {
-            ALOGD("EOCD check read failed\n");
-            result = INVALID_OPERATION;
-            goto bail;
+            if (feof(mZipFp)) {
+                ALOGW("fread EOCD failed, unexpected EOF");
+            } else {
+                ALOGW("fread EOCD failed, %s", strerror(errno));
+            }
+            return INVALID_OPERATION;
         }
         if (ZipEntry::getLongLE(checkBuf) != EndOfCentralDir::kSignature) {
             ALOGD("EOCD read check failed\n");
-            result = UNKNOWN_ERROR;
-            goto bail;
+            return UNKNOWN_ERROR;
         }
         ALOGV("+++ EOCD read check passed\n");
     }
 
-bail:
-    delete[] buf;
-    return result;
+    return OK;
 }
 
 
@@ -362,9 +352,8 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
 {
     ZipEntry* pEntry = NULL;
     status_t result = OK;
-    long lfhPosn, startPosn, endPosn, uncompressedLen;
-    FILE* inputFp = NULL;
-    uint32_t crc;
+    off_t lfhPosn, startPosn, endPosn, uncompressedLen;
+    uint32_t crc = 0;
     time_t modWhen;
 
     if (mReadOnly)
@@ -381,13 +370,14 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
     if (getEntryByName(storageName) != NULL)
         return ALREADY_EXISTS;
 
+    FILE* inputFp = NULL;
     if (!data) {
         inputFp = fopen(fileName, FILE_OPEN_RO);
         if (inputFp == NULL)
             return errnoToStatus(errno);
     }
 
-    if (fseek(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -405,9 +395,9 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
      * as a place-holder.  In theory the LFH isn't necessary, but in
      * practice some utilities demand it.
      */
-    lfhPosn = ftell(mZipFp);
+    lfhPosn = ftello(mZipFp);
     pEntry->mLFH.write(mZipFp);
-    startPosn = ftell(mZipFp);
+    startPosn = ftello(mZipFp);
 
     /*
      * Copy the data in, possibly compressing it as we go.
@@ -424,11 +414,11 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
              * to be set through an API call, but I don't expect our
              * criteria to change over time.
              */
-            long src = inputFp ? ftell(inputFp) : size;
-            long dst = ftell(mZipFp) - startPosn;
+            off_t src = inputFp ? ftello(inputFp) : size;
+            off_t dst = ftello(mZipFp) - startPosn;
             if (dst + (dst / 10) > src) {
-                ALOGD("insufficient compression (src=%ld dst=%ld), storing\n",
-                    src, dst);
+                ALOGD("insufficient compression (src=%lld dst=%lld), storing\n",
+                    (long long) src, (long long) dst);
                 failed = true;
             }
         }
@@ -436,7 +426,7 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
         if (failed) {
             compressionMethod = ZipEntry::kCompressStored;
             if (inputFp) rewind(inputFp);
-            fseek(mZipFp, startPosn, SEEK_SET);
+            fseeko(mZipFp, startPosn, SEEK_SET);
             /* fall through to kCompressStored case */
         }
     }
@@ -455,7 +445,7 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
     }
 
     // currently seeked to end of file
-    uncompressedLen = inputFp ? ftell(inputFp) : size;
+    uncompressedLen = inputFp ? ftello(inputFp) : size;
 
     /*
      * We could write the "Data Descriptor", but there doesn't seem to
@@ -463,7 +453,7 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
      *
      * Update file offsets.
      */
-    endPosn = ftell(mZipFp);            // seeked to end of compressed data
+    endPosn = ftello(mZipFp);            // seeked to end of compressed data
 
     /*
      * Success!  Fill out new values.
@@ -481,7 +471,7 @@ status_t ZipFile::addCommon(const char* fileName, const void* data, size_t size,
     /*
      * Go back and write the LFH.
      */
-    if (fseek(mZipFp, lfhPosn, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, lfhPosn, SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -514,7 +504,7 @@ status_t ZipFile::alignEntry(android::ZipEntry* pEntry, uint32_t alignTo){
 
     // Calculate where the entry payload offset will end up if we were to write
     // it as-is.
-    uint64_t expectedPayloadOffset = ftell(mZipFp) +
+    uint64_t expectedPayloadOffset = ftello(mZipFp) +
         android::ZipEntry::LocalFileHeader::kLFHLen +
         pEntry->mLFH.mFileNameLength +
         pEntry->mLFH.mExtraFieldLength;
@@ -522,7 +512,7 @@ status_t ZipFile::alignEntry(android::ZipEntry* pEntry, uint32_t alignTo){
     // If the alignment is not what was requested, add some padding in the extra
     // so the payload ends up where is requested.
     uint64_t alignDiff = alignTo - (expectedPayloadOffset % alignTo);
-    if (alignDiff == 0)
+    if (alignDiff == alignTo)
         return OK;
 
     return pEntry->addPadding(alignDiff);
@@ -540,7 +530,7 @@ status_t ZipFile::add(const ZipFile* pSourceZip, const ZipEntry* pSourceEntry,
 {
     ZipEntry* pEntry = NULL;
     status_t result;
-    long lfhPosn, endPosn;
+    off_t lfhPosn, endPosn;
 
     if (mReadOnly)
         return INVALID_OPERATION;
@@ -549,7 +539,7 @@ status_t ZipFile::add(const ZipFile* pSourceZip, const ZipEntry* pSourceEntry,
     assert(mZipFp != NULL);
     assert(mEntries.size() == mEOCD.mTotalNumEntries);
 
-    if (fseek(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -577,7 +567,7 @@ status_t ZipFile::add(const ZipFile* pSourceZip, const ZipEntry* pSourceEntry,
      * Write the LFH.  Since we're not recompressing the data, we already
      * have all of the fields filled out.
      */
-    lfhPosn = ftell(mZipFp);
+    lfhPosn = ftello(mZipFp);
     pEntry->mLFH.write(mZipFp);
 
     /*
@@ -587,8 +577,7 @@ status_t ZipFile::add(const ZipFile* pSourceZip, const ZipEntry* pSourceEntry,
      * fields as well.  This is a fixed-size area immediately following
      * the data.
      */
-    if (fseek(pSourceZip->mZipFp, pSourceEntry->getFileOffset(), SEEK_SET) != 0)
-    {
+    if (fseeko(pSourceZip->mZipFp, pSourceEntry->getFileOffset(), SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -609,7 +598,7 @@ status_t ZipFile::add(const ZipFile* pSourceZip, const ZipEntry* pSourceEntry,
     /*
      * Update file offsets.
      */
-    endPosn = ftell(mZipFp);
+    endPosn = ftello(mZipFp);
 
     /*
      * Success!  Fill out new values.
@@ -646,7 +635,7 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
 {
     ZipEntry* pEntry = NULL;
     status_t result;
-    long lfhPosn, startPosn, endPosn, uncompressedLen;
+    off_t lfhPosn, uncompressedLen;
 
     if (mReadOnly)
         return INVALID_OPERATION;
@@ -655,7 +644,7 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
     assert(mZipFp != NULL);
     assert(mEntries.size() == mEOCD.mTotalNumEntries);
 
-    if (fseek(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -680,9 +669,8 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
      * as a place-holder.  In theory the LFH isn't necessary, but in
      * practice some utilities demand it.
      */
-    lfhPosn = ftell(mZipFp);
+    lfhPosn = ftello(mZipFp);
     pEntry->mLFH.write(mZipFp);
-    startPosn = ftell(mZipFp);
 
     /*
      * Copy the data over.
@@ -691,8 +679,7 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
      * fields as well.  This is a fixed-size area immediately following
      * the data.
      */
-    if (fseek(pSourceZip->mZipFp, pSourceEntry->getFileOffset(), SEEK_SET) != 0)
-    {
+    if (fseeko(pSourceZip->mZipFp, pSourceEntry->getFileOffset(), SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -705,7 +692,7 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
             result = NO_MEMORY;
             goto bail;
         }
-        long startPosn = ftell(mZipFp);
+        off_t startPosn = ftello(mZipFp);
         uint32_t crc;
         if (compressFpToFp(mZipFp, NULL, buf, uncompressedLen, &crc) != OK) {
             ALOGW("recompress of '%s' failed\n", pEntry->mCDE.mFileName);
@@ -713,13 +700,12 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
             free(buf);
             goto bail;
         }
-        long endPosn = ftell(mZipFp);
+        off_t endPosn = ftello(mZipFp);
         pEntry->setDataInfo(uncompressedLen, endPosn - startPosn,
             pSourceEntry->getCRC32(), ZipEntry::kCompressDeflated);
         free(buf);
     } else {
-        off_t copyLen;
-        copyLen = pSourceEntry->getCompressedLen();
+        off_t copyLen = pSourceEntry->getCompressedLen();
         if ((pSourceEntry->mLFH.mGPBitFlag & ZipEntry::kUsesDataDescr) != 0)
             copyLen += ZipEntry::kDataDescriptorLen;
 
@@ -733,23 +719,18 @@ status_t ZipFile::addRecompress(const ZipFile* pSourceZip, const ZipEntry* pSour
     }
 
     /*
-     * Update file offsets.
-     */
-    endPosn = ftell(mZipFp);
-
-    /*
      * Success!  Fill out new values.
      */
     pEntry->setLFHOffset(lfhPosn);
     mEOCD.mNumEntries++;
     mEOCD.mTotalNumEntries++;
     mEOCD.mCentralDirSize = 0;      // mark invalid; set by flush()
-    mEOCD.mCentralDirOffset = endPosn;
+    mEOCD.mCentralDirOffset = ftello(mZipFp);
 
     /*
      * Go back and write the LFH.
      */
-    if (fseek(mZipFp, lfhPosn, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, lfhPosn, SEEK_SET) != 0) {
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -785,15 +766,18 @@ status_t ZipFile::copyFpToFp(FILE* dstFp, FILE* srcFp, uint32_t* pCRC32)
 
     while (1) {
         count = fread(tmpBuf, 1, sizeof(tmpBuf), srcFp);
-        if (ferror(srcFp) || ferror(dstFp))
-            return errnoToStatus(errno);
+        if (ferror(srcFp) || ferror(dstFp)) {
+            status_t status = errnoToStatus(errno);
+            ALOGW("fread %zu bytes failed, %s", count, strerror(errno));
+            return status;
+        }
         if (count == 0)
             break;
 
         *pCRC32 = crc32(*pCRC32, tmpBuf, count);
 
         if (fwrite(tmpBuf, 1, count, dstFp) != count) {
-            ALOGD("fwrite %d bytes failed\n", (int) count);
+            ALOGW("fwrite %zu bytes failed, %s", count, strerror(errno));
             return UNKNOWN_ERROR;
         }
     }
@@ -813,7 +797,7 @@ status_t ZipFile::copyDataToFp(FILE* dstFp,
     if (size > 0) {
         *pCRC32 = crc32(*pCRC32, (const unsigned char*)data, size);
         if (fwrite(data, 1, size, dstFp) != size) {
-            ALOGD("fwrite %d bytes failed\n", (int) size);
+            ALOGW("fwrite %zu bytes failed, %s", size, strerror(errno));
             return UNKNOWN_ERROR;
         }
     }
@@ -847,7 +831,11 @@ status_t ZipFile::copyPartialFpToFp(FILE* dstFp, FILE* srcFp, size_t length,
 
         count = fread(tmpBuf, 1, readSize, srcFp);
         if (count != readSize) {     // error or unexpected EOF
-            ALOGD("fread %d bytes failed\n", (int) readSize);
+            if (feof(srcFp)) {
+                ALOGW("fread %zu bytes failed, unexpected EOF", readSize);
+            } else {
+                ALOGW("fread %zu bytes failed, %s", readSize, strerror(errno));
+            }
             return UNKNOWN_ERROR;
         }
 
@@ -855,7 +843,7 @@ status_t ZipFile::copyPartialFpToFp(FILE* dstFp, FILE* srcFp, size_t length,
             *pCRC32 = crc32(*pCRC32, tmpBuf, count);
 
         if (fwrite(tmpBuf, 1, count, dstFp) != count) {
-            ALOGD("fwrite %d bytes failed\n", (int) count);
+            ALOGW("fwrite %zu bytes failed, %s", count, strerror(errno));
             return UNKNOWN_ERROR;
         }
 
@@ -915,8 +903,7 @@ status_t ZipFile::compressFpToFp(FILE* dstFp, FILE* srcFp,
                 goto bail;
             }
             if (getSize < kBufSize) {
-                ALOGV("+++  got %d bytes, EOF reached\n",
-                    (int)getSize);
+                ALOGV("+++  got %zu bytes, EOF reached\n", getSize);
                 atEof = true;
             }
 
@@ -926,9 +913,9 @@ status_t ZipFile::compressFpToFp(FILE* dstFp, FILE* srcFp,
         delete[] inBuf;
     }
 
-    ALOGV("+++ writing %d bytes\n", (int)outSize);
+    ALOGV("+++ writing %zu bytes\n", outSize);
     if (fwrite(outBuf, 1, outSize, dstFp) != outSize) {
-        ALOGD("write %d failed in deflate\n", (int)outSize);
+        ALOGW("fwrite %zu bytes failed, %s", outSize, strerror(errno));
         result = UNKNOWN_ERROR;
         goto bail;
     }
@@ -970,7 +957,7 @@ status_t ZipFile::remove(ZipEntry* pEntry)
 status_t ZipFile::flush(void)
 {
     status_t result = OK;
-    long eocdPosn;
+    off_t eocdPosn;
     int i, count;
 
     if (mReadOnly)
@@ -984,8 +971,7 @@ status_t ZipFile::flush(void)
     if (result != OK)
         return result;
 
-    if (fseek(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0)
-        return UNKNOWN_ERROR;
+    if (fseeko(mZipFp, mEOCD.mCentralDirOffset, SEEK_SET) != 0) return UNKNOWN_ERROR;
 
     count = mEntries.size();
     for (i = 0; i < count; i++) {
@@ -993,7 +979,7 @@ status_t ZipFile::flush(void)
         pEntry->mCDE.write(mZipFp);
     }
 
-    eocdPosn = ftell(mZipFp);
+    eocdPosn = ftello(mZipFp);
     mEOCD.mCentralDirSize = eocdPosn - mEOCD.mCentralDirOffset;
 
     mEOCD.write(mZipFp);
@@ -1003,8 +989,8 @@ status_t ZipFile::flush(void)
      * with plain files, or if we deleted some entries, there's a lot
      * of wasted space at the end of the file.  Remove it now.
      */
-    if (ftruncate(fileno(mZipFp), ftell(mZipFp)) != 0) {
-        ALOGW("ftruncate failed %ld: %s\n", ftell(mZipFp), strerror(errno));
+    if (ftruncate(fileno(mZipFp), ftello(mZipFp)) != 0) {
+        ALOGW("ftruncate failed %lld: %s\n", (long long) ftello(mZipFp), strerror(errno));
         // not fatal
     }
 
@@ -1133,25 +1119,32 @@ status_t ZipFile::filemove(FILE* fp, off_t dst, off_t src, size_t n)
             if (getSize > n)
                 getSize = n;
 
-            if (fseek(fp, (long) src, SEEK_SET) != 0) {
-                ALOGD("filemove src seek %ld failed\n", (long) src);
+            if (fseeko(fp, src, SEEK_SET) != 0) {
+                ALOGW("filemove src seek %lld failed, %s",
+                    (long long) src, strerror(errno));
                 return UNKNOWN_ERROR;
             }
 
             if (fread(readBuf, 1, getSize, fp) != getSize) {
-                ALOGD("filemove read %ld off=%ld failed\n",
-                    (long) getSize, (long) src);
+                if (feof(fp)) {
+                    ALOGW("fread %zu bytes off=%lld failed, unexpected EOF",
+                        getSize, (long long) src);
+                } else {
+                    ALOGW("fread %zu bytes off=%lld failed, %s",
+                        getSize, (long long) src, strerror(errno));
+                }
                 return UNKNOWN_ERROR;
             }
 
-            if (fseek(fp, (long) dst, SEEK_SET) != 0) {
-                ALOGD("filemove dst seek %ld failed\n", (long) dst);
+            if (fseeko(fp, dst, SEEK_SET) != 0) {
+                ALOGW("filemove dst seek %lld failed, %s",
+                    (long long) dst, strerror(errno));
                 return UNKNOWN_ERROR;
             }
 
             if (fwrite(readBuf, 1, getSize, fp) != getSize) {
-                ALOGD("filemove write %ld off=%ld failed\n",
-                    (long) getSize, (long) dst);
+                ALOGW("filemove write %zu off=%lld failed, %s",
+                    getSize, (long long) dst, strerror(errno));
                 return UNKNOWN_ERROR;
             }
 
@@ -1248,10 +1241,10 @@ class FileReader : public zip_archive::Reader {
 
     bool ReadAtOffset(uint8_t* buf, size_t len, off64_t offset) const {
         // Data is usually requested sequentially, so this helps avoid pointless
-        // fseeks every time we perform a read. There's an impedence mismatch
+        // seeks every time we perform a read. There's an impedence mismatch
         // here because the original API was designed around pread and pwrite.
         if (offset != current_offset_) {
-            if (fseek(fp_, offset, SEEK_SET) != 0) {
+            if (fseeko(fp_, offset, SEEK_SET) != 0) {
                 return false;
             }
 
@@ -1283,10 +1276,10 @@ void* ZipFile::uncompress(const ZipEntry* entry) const
         return NULL;
     }
 
-    fseek(mZipFp, 0, SEEK_SET);
+    fseeko(mZipFp, 0, SEEK_SET);
 
     off_t offset = entry->getFileOffset();
-    if (fseek(mZipFp, offset, SEEK_SET) != 0) {
+    if (fseeko(mZipFp, offset, SEEK_SET) != 0) {
         goto bail;
     }
 
@@ -1399,12 +1392,17 @@ status_t ZipFile::EndOfCentralDir::write(FILE* fp)
     ZipEntry::putLongLE(&buf[0x10], mCentralDirOffset);
     ZipEntry::putShortLE(&buf[0x14], mCommentLen);
 
-    if (fwrite(buf, 1, kEOCDLen, fp) != kEOCDLen)
+    if (fwrite(buf, 1, kEOCDLen, fp) != kEOCDLen) {
+        ALOGW("fwrite EOCD failed, %s", strerror(errno));
         return UNKNOWN_ERROR;
+    }
     if (mCommentLen > 0) {
         assert(mComment != NULL);
-        if (fwrite(mComment, mCommentLen, 1, fp) != mCommentLen)
+        if (fwrite(mComment, mCommentLen, 1, fp) != mCommentLen) {
+            ALOGW("fwrite %d bytes failed, %s",
+                (int) mCommentLen, strerror(errno));
             return UNKNOWN_ERROR;
+        }
     }
 
     return OK;

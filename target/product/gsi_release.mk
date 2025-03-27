@@ -23,33 +23,26 @@
 # - Released GSI contains more VNDK packages to support old version vendors
 # - etc.
 #
+# See device/generic/common/README.md for more details.
+#
 
 BUILDING_GSI := true
 
-# Exclude all files under system/product and system/system_ext
 PRODUCT_ARTIFACT_PATH_REQUIREMENT_ALLOWED_LIST += \
+    system/etc/init/config \
     system/product/% \
     system/system_ext/%
 
-# Split selinux policy
-PRODUCT_FULL_TREBLE_OVERRIDE := true
+# GSI should always support up-to-date platform features.
+# Keep this value at the latest API level to ensure latest build system
+# default configs are applied.
+PRODUCT_SHIPPING_API_LEVEL := 34
+
+# Enable dynamic partitions to facilitate mixing onto Cuttlefish
+PRODUCT_USE_DYNAMIC_PARTITIONS := true
 
 # Enable dynamic partition size
 PRODUCT_USE_DYNAMIC_PARTITION_SIZE := true
-
-# Needed by Pi newly launched device to pass VtsTrebleSysProp on GSI
-PRODUCT_COMPATIBLE_PROPERTY_OVERRIDE := true
-
-# GSI targets should install "unflattened" APEXes in /system
-TARGET_FLATTEN_APEX := false
-
-# GSI targets should install "flattened" APEXes in /system_ext as well
-PRODUCT_INSTALL_EXTRA_FLATTENED_APEXES := true
-
-# The flattened version of com.android.apex.cts.shim.v1 should be explicitly installed
-# because the shim apex is prebuilt one and PRODUCT_INSTALL_EXTRA_FLATTENED_APEXES is not
-# supported for prebuilt_apex modules yet.
-PRODUCT_PACKAGES += com.android.apex.cts.shim.v1_with_prebuilts.flattened
 
 # GSI specific tasks on boot
 PRODUCT_PACKAGES += \
@@ -57,5 +50,53 @@ PRODUCT_PACKAGES += \
     init.gsi.rc \
     init.vndk-nodef.rc \
 
-# Support additional P, Q and R VNDK packages
-PRODUCT_EXTRA_VNDK_VERSIONS := 28 29 30
+
+# Overlay the GSI specific setting for framework and SystemUI
+ifneq ($(PRODUCT_IS_AUTOMOTIVE),true)
+    PRODUCT_PACKAGES += \
+        gsi_overlay_framework \
+        gsi_overlay_systemui \
+    PRODUCT_COPY_FILES += \
+        device/generic/common/overlays/overlay-config.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/overlay/config/config.xml
+endif
+
+# Support additional VNDK snapshots
+PRODUCT_EXTRA_VNDK_VERSIONS := \
+    30 \
+    31 \
+    32 \
+    33 \
+    34 \
+
+# Do not build non-GSI partition images.
+PRODUCT_BUILD_CACHE_IMAGE := false
+PRODUCT_BUILD_DEBUG_BOOT_IMAGE := false
+PRODUCT_BUILD_DEBUG_VENDOR_BOOT_IMAGE := false
+PRODUCT_BUILD_USERDATA_IMAGE := false
+PRODUCT_BUILD_VENDOR_IMAGE := false
+PRODUCT_BUILD_SUPER_PARTITION := false
+PRODUCT_BUILD_SUPER_EMPTY_IMAGE := false
+PRODUCT_BUILD_SYSTEM_DLKM_IMAGE := false
+PRODUCT_EXPORT_BOOT_IMAGE_TO_DIST := true
+
+# Build pvmfw with GSI: b/376363989, pvmfw currently only supports AArch64
+ifneq (,$(filter %_arm64,$(TARGET_PRODUCT)))
+PRODUCT_BUILD_PVMFW_IMAGE := true
+endif
+
+# Additional settings used in all GSI builds
+PRODUCT_PRODUCT_PROPERTIES += \
+    ro.crypto.metadata_init_delete_all_keys.enabled=false \
+    debug.codec2.bqpool_dealloc_after_stop=1 \
+
+# Window Extensions
+ifneq ($(PRODUCT_IS_ATV),true)
+$(call inherit-product, $(SRC_TARGET_DIR)/product/window_extensions.mk)
+endif
+
+# A GSI is to be mixed with different boot images. That means we can't determine
+# the kernel version when building a GSI.
+# Assume the device supports UFFD. If it doesn't, the ART runtime will fall back
+# to CC, and odrefresh will regenerate core dexopt artifacts on the first boot,
+# so this is okay.
+PRODUCT_ENABLE_UFFD_GC := true

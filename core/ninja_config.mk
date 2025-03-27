@@ -14,18 +14,14 @@ PARSE_TIME_MAKE_GOALS := \
 	$(PARSE_TIME_MAKE_GOALS) \
 	$(dont_bother_goals) \
 	all \
-	ECLIPSE-% \
 	brillo_tests \
 	btnod \
 	build-art% \
 	build_kernel-nodeps \
 	clean-oat% \
-	continuous_instrumentation_tests \
-	continuous_native_tests \
-	cts \
 	custom_images \
 	dicttool_aosp \
-	dump-products \
+	docs \
 	eng \
 	oem_image \
 	online-system-api-sdk-docs \
@@ -38,15 +34,19 @@ PARSE_TIME_MAKE_GOALS := \
 	test-art% \
 	user \
 	userdataimage \
-	userdebug \
-	win_sdk \
-	winsdk-tools
+	userdebug
 
 include $(wildcard vendor/*/build/ninja_config.mk)
 
 # Any Android goals that need to be built.
 ANDROID_GOALS := $(filter-out $(KATI_OUTPUT_PATTERNS),\
     $(sort $(ORIGINAL_MAKECMDGOALS) $(MAKECMDGOALS)))
+# Temporary compatibility support until the build server configs are updated
+ANDROID_GOALS := $(patsubst win_sdk,sdk,$(ANDROID_GOALS))
+ifneq ($(HOST_OS),linux)
+  ANDROID_GOALS := $(filter-out sdk,$(ANDROID_GOALS))
+  ANDROID_GOALS := $(patsubst sdk_repo,sdk-repo-build-tools sdk-repo-platform-tools,$(ANDROID_GOALS))
+endif
 # Goals we need to pass to Ninja.
 NINJA_GOALS := $(filter-out $(NINJA_EXCLUDE_GOALS), $(ANDROID_GOALS))
 ifndef NINJA_GOALS

@@ -58,19 +58,6 @@ if sys.hexversion < 0x02070000:
 
 logger = logging.getLogger(__name__)
 
-# Work around a bug in Python's zipfile module that prevents opening of zipfiles
-# if any entry has an extra field of between 1 and 3 bytes (which is common with
-# zipaligned APKs). This overrides the ZipInfo._decodeExtra() method (which
-# contains the bug) with an empty version (since we don't need to decode the
-# extra field anyway).
-# Issue #14315: https://bugs.python.org/issue14315, fixed in Python 2.7.8 and
-# Python 3.5.0 alpha 1.
-class MyZipInfo(zipfile.ZipInfo):
-  def _decodeExtra(self):
-    pass
-
-zipfile.ZipInfo = MyZipInfo
-
 
 OPTIONS = common.OPTIONS
 
@@ -83,6 +70,7 @@ PROBLEM_PREFIX = []
 
 
 def AddProblem(msg):
+  logger.error(msg)
   PROBLEMS.append(" ".join(PROBLEM_PREFIX) + " " + msg)
 
 
@@ -204,7 +192,7 @@ class APK(object):
       for info in apk.infolist():
         filename = info.filename
         if (filename.startswith("META-INF/") and
-            info.filename.endswith((".DSA", ".RSA"))):
+                info.filename.endswith((".DSA", ".RSA"))):
           pkcs7 = apk.read(filename)
           cert = CertFromPKCS7(pkcs7, filename)
           if not cert:
@@ -233,9 +221,12 @@ class APK(object):
     # Signer #1 certificate DN: ...
     # Signer #1 certificate SHA-256 digest: ...
     # Signer #1 certificate SHA-1 digest: ...
+    # Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: 56be132b780656fe2444cd34326eb5d7aac91d2096abf0fe673a99270622ec87
+    # Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-1 digest: 19da94896ce4078c38ca695701f1dec741ec6d67
     # ...
     certs_info = {}
-    certificate_regex = re.compile(r"(Signer #[0-9]+) (certificate .*):(.*)")
+    certificate_regex = re.compile(
+        r"(Signer (?:#[0-9]+|\(.*\))) (certificate .*):(.*)")
     for line in output.splitlines():
       m = certificate_regex.match(line)
       if not m:
@@ -266,7 +257,7 @@ class APK(object):
                    stdout=subprocess.PIPE)
     manifest, err = p.communicate()
     if err:
-      AddProblem("failed to read manifest")
+      AddProblem("failed to read manifest " + full_filename)
       return
 
     self.shared_uid = None
@@ -279,15 +270,15 @@ class APK(object):
         name = m.group(1)
         if name == "android:sharedUserId":
           if self.shared_uid is not None:
-            AddProblem("multiple sharedUserId declarations")
+            AddProblem("multiple sharedUserId declarations " + full_filename)
           self.shared_uid = m.group(2)
         elif name == "package":
           if self.package is not None:
-            AddProblem("multiple package declarations")
+            AddProblem("multiple package declarations " + full_filename)
           self.package = m.group(2)
 
     if self.package is None:
-      AddProblem("no package declaration")
+      AddProblem("no package declaration " + full_filename)
 
 
 class TargetFiles(object):
@@ -306,7 +297,7 @@ class TargetFiles(object):
     # This is the list of wildcards of files we extract from |filename|.
     apk_extensions = ['*.apk', '*.apex']
 
-    with zipfile.ZipFile(filename) as input_zip:
+    with zipfile.ZipFile(filename, "r") as input_zip:
       self.certmap, compressed_extension = common.ReadApkCerts(input_zip)
     if compressed_extension:
       apk_extensions.append('*.apk' + compressed_extension)
@@ -338,8 +329,8 @@ class TargetFiles(object):
           apk = APK(fullname, displayname)
           self.apks[apk.filename] = apk
           self.apks_by_basename[os.path.basename(apk.filename)] = apk
-
-          self.max_pkg_len = max(self.max_pkg_len, len(apk.package))
+          if apk.package:
+            self.max_pkg_len = max(self.max_pkg_len, len(apk.package))
           self.max_fn_len = max(self.max_fn_len, len(apk.filename))
 
   def CheckSharedUids(self):
@@ -392,7 +383,8 @@ class TargetFiles(object):
     by_digest = {}
     for apk in self.apks.values():
       for digest in apk.cert_digests:
-        by_digest.setdefault(digest, []).append((apk.package, apk))
+        if apk.package:
+          by_digest.setdefault(digest, []).append((apk.package, apk))
 
     order = [(-len(v), k) for (k, v) in by_digest.items()]
     order.sort()
@@ -400,7 +392,12 @@ class TargetFiles(object):
     for _, digest in order:
       print("%s:" % (ALL_CERTS.Get(digest),))
       apks = by_digest[digest]
-      apks.sort()
+      apks.sort(key=lambda x: x[0])
+      for i in range(1, len(apks)):
+        pkgname, apk = apks[i]
+        if pkgname == apks[i-1][0]:
+          print("Both {} and {} have same package name {}".format(
+              apk.filename, apks[i-1][1].filename, pkgname))
       for _, apk in apks:
         if apk.shared_uid:
           print("  %-*s  %-*s  [%s]" % (self.max_fn_len, apk.filename,
@@ -527,8 +524,5 @@ if __name__ == '__main__':
   try:
     r = main(sys.argv[1:])
     sys.exit(r)
-  except common.ExternalError as e:
-    print("\n   ERROR: %s\n" % (e,))
-    sys.exit(1)
   finally:
     common.Cleanup()

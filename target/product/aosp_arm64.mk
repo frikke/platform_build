@@ -43,6 +43,9 @@ endif
 $(call inherit-product, $(SRC_TARGET_DIR)/product/handheld_system_ext.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/telephony_system_ext.mk)
 
+# pKVM
+$(call inherit-product-if-exists, packages/modules/Virtualization/apex/product_packages.mk)
+
 #
 # All components inherited here go to product image
 #
@@ -51,18 +54,28 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/aosp_product.mk)
 #
 # All components inherited here go to vendor or vendor_boot image
 #
-$(call inherit-product, $(SRC_TARGET_DIR)/product/emulator_vendor.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/board/generic_arm64/device.mk)
+AB_OTA_UPDATER := true
+AB_OTA_PARTITIONS ?= system
 
 #
 # Special settings for GSI releasing
 #
 ifeq (aosp_arm64,$(TARGET_PRODUCT))
-$(call inherit-product, $(SRC_TARGET_DIR)/product/gsi_release.mk)
-endif
+# Build modules from source if this has not been pre-configured
+MODULE_BUILD_FROM_SOURCE ?= true
 
+$(call inherit-product, $(SRC_TARGET_DIR)/product/gsi_release.mk)
+
+PRODUCT_SOONG_DEFINED_SYSTEM_IMAGE := aosp_system_image
+USE_SOONG_DEFINED_SYSTEM_IMAGE := true
+PRODUCT_USE_SOONG_NOTICE_XML := true
+
+endif
 
 PRODUCT_NAME := aosp_arm64
 PRODUCT_DEVICE := generic_arm64
 PRODUCT_BRAND := Android
 PRODUCT_MODEL := AOSP on ARM64
+
+PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO := true

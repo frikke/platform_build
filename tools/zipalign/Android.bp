@@ -4,6 +4,10 @@
 // Zip alignment tool
 //
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 cc_defaults {
     name: "zipalign_defaults",
     target: {
@@ -66,6 +70,8 @@ cc_test_host {
         "libgmock",
     ],
     data: [
+         "tests/data/apkWithUncompressedSharedLibs.zip",
+         "tests/data/archiveWithOneDirectoryEntry.zip",
          "tests/data/diffOrders.zip",
          "tests/data/holes.zip",
          "tests/data/unaligned.zip",

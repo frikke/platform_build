@@ -14,9 +14,6 @@
 # limitations under the License.
 #
 
-PRODUCT_SOONG_NAMESPACES += device/generic/goldfish # for libwifi-hal-emu
-PRODUCT_SOONG_NAMESPACES += device/generic/goldfish-opengl # for goldfish deps.
-
 # This is a generic phone product that isn't specialized for a specific device.
 # It includes the base Android platform.
 
@@ -29,4 +26,10 @@ PRODUCT_DEVICE := generic
 PRODUCT_NAME := generic
 
 allowed_list := product_manifest.xml
+
+# TODO(b/182105280): When ART prebuilts are used in this product, Soong doesn't
+# produce any Android.mk entries for them. Exclude them until that problem is
+# fixed.
+allowed_list += com.android.art com.android.art.debug
+
 $(call enforce-product-packages-exist,$(allowed_list))

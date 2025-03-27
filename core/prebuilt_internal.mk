@@ -39,6 +39,11 @@ endif
 
 LOCAL_CHECKED_MODULE := $(my_prebuilt_src_file)
 
+ifneq (,$(LOCAL_APKCERTS_FILE))
+  PACKAGES := $(PACKAGES) $(LOCAL_MODULE)
+  PACKAGES.$(LOCAL_MODULE).APKCERTS_FILE := $(LOCAL_APKCERTS_FILE)
+endif
+
 ifneq (APPS,$(LOCAL_MODULE_CLASS))
 ifdef LOCAL_COMPRESSED_MODULE
 $(error $(LOCAL_MODULE) : LOCAL_COMPRESSED_MODULE can only be defined for module class APPS)
@@ -57,7 +62,11 @@ else
   $(error $(LOCAL_MODULE) : unexpected LOCAL_MODULE_CLASS for prebuilts: $(LOCAL_MODULE_CLASS))
 endif
 
+$(if $(filter-out $(SOONG_ANDROID_MK),$(LOCAL_MODULE_MAKEFILE)), \
+  $(eval ALL_MODULES.$(my_register_name).IS_PREBUILT_MAKE_MODULE := Y))
+
 $(built_module) : $(LOCAL_ADDITIONAL_DEPENDENCIES)
 
 my_prebuilt_src_file :=
-my_preopt_for_extracted_apk :=
+
+$(if $(my_register_name),$(eval ALL_MODULES.$(my_register_name).MAKE_MODULE_TYPE:=PREBUILT))

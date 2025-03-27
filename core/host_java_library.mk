@@ -56,10 +56,6 @@ ALL_MODULES.$(my_register_name).SRCS := $(ALL_MODULES.$(my_register_name).SRCS) 
 
 include $(BUILD_SYSTEM)/java_common.mk
 
-# The layers file allows you to enforce a layering between java packages.
-# Run build/make/tools/java-layers.py for more details.
-layers_file := $(addprefix $(LOCAL_PATH)/, $(LOCAL_JAVA_LAYERS_FILE))
-
 # List of dependencies for anything that needs all java sources in place
 java_sources_deps := \
     $(java_sources) \
@@ -72,7 +68,6 @@ $(java_source_list_file): $(java_sources_deps)
 
 # TODO(b/143658984): goma can't handle the --system argument to javac.
 #$(full_classes_compiled_jar): .KATI_NINJA_POOL := $(GOMA_POOL)
-$(full_classes_compiled_jar): PRIVATE_JAVA_LAYERS_FILE := $(layers_file)
 $(full_classes_compiled_jar): PRIVATE_JAVACFLAGS := $(LOCAL_JAVACFLAGS) $(annotation_processor_flags)
 $(full_classes_compiled_jar): PRIVATE_JAR_EXCLUDE_FILES :=
 $(full_classes_compiled_jar): PRIVATE_JAR_PACKAGES :=
@@ -103,9 +98,7 @@ $(full_classes_combined_jar): PRIVATE_DONT_DELETE_JAR_META_INF := $(LOCAL_DONT_D
 $(full_classes_combined_jar): $(full_classes_compiled_jar) \
                               $(jar_manifest_file) \
                               $(full_static_java_libs) | $(MERGE_ZIPS)
-	$(if $(PRIVATE_JAR_MANIFEST), $(hide) sed -e "s/%BUILD_NUMBER%/$(BUILD_NUMBER_FROM_FILE)/" \
-            $(PRIVATE_JAR_MANIFEST) > $(dir $@)/manifest.mf)
-	$(MERGE_ZIPS) -j --ignore-duplicates $(if $(PRIVATE_JAR_MANIFEST),-m $(dir $@)/manifest.mf) \
+	$(MERGE_ZIPS) -j --ignore-duplicates $(if $(PRIVATE_JAR_MANIFEST),-m $(PRIVATE_JAR_MANIFEST)) \
             $(if $(PRIVATE_DONT_DELETE_JAR_META_INF),,-stripDir META-INF -zipToNotStrip $<) \
             $@ $< $(PRIVATE_STATIC_JAVA_LIBRARIES)
 
@@ -113,8 +106,7 @@ $(full_classes_combined_jar): $(full_classes_compiled_jar) \
 ifneq ($(strip $(LOCAL_JARJAR_RULES)),)
 $(full_classes_jarjar_jar): PRIVATE_JARJAR_RULES := $(LOCAL_JARJAR_RULES)
 $(full_classes_jarjar_jar): $(full_classes_combined_jar) $(LOCAL_JARJAR_RULES) | $(JARJAR)
-	@echo JarJar: $@
-	$(hide) $(JAVA) -jar $(JARJAR) process $(PRIVATE_JARJAR_RULES) $< $@
+	$(call transform-jarjar)
 else
 full_classes_jarjar_jar := $(full_classes_combined_jar)
 endif
@@ -132,3 +124,5 @@ $(eval $(call copy-one-file,$(LOCAL_FULL_CLASSES_JACOCO_JAR),$(full_classes_jar)
 ifeq ($(TURBINE_ENABLED),false)
 $(eval $(call copy-one-file,$(LOCAL_FULL_CLASSES_JACOCO_JAR),$(full_classes_header_jar)))
 endif
+
+$(if $(my_register_name),$(eval ALL_MODULES.$(my_register_name).MAKE_MODULE_TYPE:=HOST_JAVA_LIBRARY))

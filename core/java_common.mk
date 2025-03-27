@@ -10,9 +10,7 @@ endif
 ## Java version
 ###########################################################
 # Use the LOCAL_JAVA_LANGUAGE_VERSION if it is set, otherwise
-# use one based on the LOCAL_SDK_VERSION. If it is < 24
-# pass "1.7" to the tools, if it is unset, >= 24 or "current"
-# pass "1.8".
+# use one based on the LOCAL_SDK_VERSION.
 #
 # The LOCAL_SDK_VERSION behavior is to ensure that, by default,
 # code that is expected to run on older releases of Android
@@ -21,15 +19,24 @@ endif
 # Modules can override this logic by specifying
 # LOCAL_JAVA_LANGUAGE_VERSION explicitly.
 ifeq (,$(LOCAL_JAVA_LANGUAGE_VERSION))
-  ifneq (,$(filter $(LOCAL_SDK_VERSION), $(TARGET_SDK_VERSIONS_WITHOUT_JAVA_18_SUPPORT)))
-    LOCAL_JAVA_LANGUAGE_VERSION := 1.7
-  else ifneq (,$(filter $(LOCAL_SDK_VERSION), $(TARGET_SDK_VERSIONS_WITHOUT_JAVA_19_SUPPORT)))
-    LOCAL_JAVA_LANGUAGE_VERSION := 1.8
-  else ifneq (,$(LOCAL_SDK_VERSION)$(TARGET_BUILD_USE_PREBUILT_SDKS))
-    # TODO(ccross): allow 1.9 for current and unbundled once we have SDK system modules
-    LOCAL_JAVA_LANGUAGE_VERSION := 1.8
-  else
+  ifdef LOCAL_IS_HOST_MODULE
+    # Host modules always default to 1.9
     LOCAL_JAVA_LANGUAGE_VERSION := 1.9
+  else
+    ifneq (,$(filter $(LOCAL_SDK_VERSION), $(TARGET_SDK_VERSIONS_WITHOUT_JAVA_1_9_SUPPORT)))
+      LOCAL_JAVA_LANGUAGE_VERSION := 1.8
+    else ifneq (,$(filter $(LOCAL_SDK_VERSION), $(TARGET_SDK_VERSIONS_WITHOUT_JAVA_11_SUPPORT)))
+      LOCAL_JAVA_LANGUAGE_VERSION := 1.9
+    else ifneq (,$(filter $(LOCAL_SDK_VERSION), $(TARGET_SDK_VERSIONS_WITHOUT_JAVA_17_SUPPORT)))
+      LOCAL_JAVA_LANGUAGE_VERSION := 11
+    else ifneq (,$(LOCAL_SDK_VERSION)$(TARGET_BUILD_USE_PREBUILT_SDKS))
+      # TODO(ccross): allow 1.9 for current and unbundled once we have SDK system modules
+      LOCAL_JAVA_LANGUAGE_VERSION := 1.8
+    else ifeq ($(RELEASE_TARGET_JAVA_21),true)
+      LOCAL_JAVA_LANGUAGE_VERSION := 21
+    else
+      LOCAL_JAVA_LANGUAGE_VERSION := 17
+    endif
   endif
 endif
 LOCAL_JAVACFLAGS += -source $(LOCAL_JAVA_LANGUAGE_VERSION) -target $(LOCAL_JAVA_LANGUAGE_VERSION)
@@ -185,7 +192,7 @@ endif
 ######################################
 ## PRIVATE java vars
 # LOCAL_SOURCE_FILES_ALL_GENERATED is set only if the module does not have static source files,
-# but generated source files in its LOCAL_INTERMEDIATE_SOURCE_DIR.
+# but generated source files.
 # You have to set up the dependency in some other way.
 need_compile_java := $(strip $(all_java_sources)$(LOCAL_SRCJARS)$(all_res_assets)$(java_resource_sources))$(LOCAL_STATIC_JAVA_LIBRARIES)$(filter true,$(LOCAL_SOURCE_FILES_ALL_GENERATED))
 ifdef need_compile_java
@@ -228,8 +235,6 @@ $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_SOURCE_INTERMEDIATES_DIR := $(intermediat
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_HAS_RS_SOURCES :=
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_JAVA_SOURCES := $(all_java_sources)
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_JAVA_SOURCE_LIST := $(java_source_list_file)
-
-$(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_RMTYPEDEFS := $(LOCAL_RMTYPEDEFS)
 
 # Quickly check class path vars.
 disallowed_deps := $(foreach sdk,$(TARGET_AVAILABLE_SDK_VERSIONS),$(call resolve-prebuilt-sdk-module,$(sdk)))
@@ -291,16 +296,16 @@ ifndef LOCAL_IS_HOST_MODULE
       # Note: the lib naming scheme must be kept in sync with build/soong/java/sdk_library.go.
       sdk_lib_suffix = $(call pretty-error,sdk_lib_suffix was not set correctly)
       ifeq (current,$(LOCAL_SDK_VERSION))
-        sdk_module := android_stubs_current
+        sdk_module := $(ANDROID_PUBLIC_STUBS)
         sdk_lib_suffix := .stubs
       else ifeq (system_current,$(LOCAL_SDK_VERSION))
-        sdk_module := android_system_stubs_current
+        sdk_module := $(ANDROID_SYSTEM_STUBS)
         sdk_lib_suffix := .stubs.system
       else ifeq (test_current,$(LOCAL_SDK_VERSION))
-        sdk_module := android_test_stubs_current
+        sdk_module := $(ANDROID_TEST_STUBS)
         sdk_lib_suffix := .stubs.test
       else ifeq (core_current,$(LOCAL_SDK_VERSION))
-        sdk_module := core.current.stubs
+        sdk_module := $(ANDROID_CORE_STUBS)
         sdk_lib_suffix = $(call pretty-error,LOCAL_SDK_LIBRARIES not supported for LOCAL_SDK_VERSION = core_current)
       endif
       sdk_libs := $(foreach lib_name,$(LOCAL_SDK_LIBRARIES),$(lib_name)$(sdk_lib_suffix))
@@ -378,9 +383,8 @@ else # LOCAL_IS_HOST_MODULE
   endif # USE_CORE_LIB_BOOTCLASSPATH
 endif # !LOCAL_IS_HOST_MODULE
 
-ifdef RECORD_ALL_DEPS
-ALL_DEPS.$(LOCAL_MODULE).ALL_DEPS := $(ALL_DEPS.$(LOCAL_MODULE).ALL_DEPS) $(full_java_bootclasspath_libs)
-endif
+# (b/204397180) Record ALL_DEPS by default.
+ALL_MODULES.$(my_register_name).ALL_DEPS := $(ALL_MODULES.$(my_register_name).ALL_DEPS) $(full_java_bootclasspath_libs)
 
 # Export the SDK libs. The sdk library names listed in LOCAL_SDK_LIBRARIES are first exported.
 # Then sdk library names exported from dependencies are all re-exported.
@@ -406,7 +410,7 @@ endif
 full_java_system_modules_deps :=
 my_system_modules_dir :=
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_USE_SYSTEM_MODULES :=
-ifeq ($(LOCAL_JAVA_LANGUAGE_VERSION),1.9)
+ifeq (,$(filter $(LOCAL_JAVA_LANGUAGE_VERSION),$(JAVA_LANGUAGE_VERSIONS_WITHOUT_SYSTEM_MODULES)))
   $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_USE_SYSTEM_MODULES := true
   ifdef my_system_modules
     ifneq ($(my_system_modules),none)
@@ -483,20 +487,6 @@ full_java_header_libs := $(full_shared_java_header_libs) $(full_static_java_head
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_ALL_JAVA_LIBRARIES := $(full_java_libs)
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_ALL_JAVA_HEADER_LIBRARIES := $(full_java_header_libs)
 $(LOCAL_INTERMEDIATE_TARGETS): PRIVATE_SHARED_JAVA_HEADER_LIBRARIES := $(full_shared_java_header_libs)
-
-ALL_MODULES.$(my_register_name).INTERMEDIATE_SOURCE_DIR := \
-    $(ALL_MODULES.$(my_register_name).INTERMEDIATE_SOURCE_DIR) $(LOCAL_INTERMEDIATE_SOURCE_DIR)
-
-
-##########################################################
-# Copy NOTICE files of transitive static dependencies
-# Don't do this in mm, since many of the targets won't exist.
-installed_static_library_notice_file_targets := \
-    $(foreach lib,$(LOCAL_STATIC_JAVA_LIBRARIES), \
-      NOTICE-$(if $(LOCAL_IS_HOST_MODULE),HOST$(if $(my_host_cross),_CROSS,),TARGET)-JAVA_LIBRARIES-$(lib))
-
-$(notice_target): | $(installed_static_library_notice_file_targets)
-$(LOCAL_INSTALLED_MODULE): | $(notice_target)
 
 ###########################################################
 # Verify that all libraries are safe to use

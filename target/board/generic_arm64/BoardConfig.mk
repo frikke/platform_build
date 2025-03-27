@@ -23,14 +23,14 @@ TARGET_2ND_ARCH := arm
 TARGET_2ND_CPU_ABI := armeabi-v7a
 TARGET_2ND_CPU_ABI2 := armeabi
 
-ifneq ($(TARGET_BUILD_APPS)$(filter cts sdk,$(MAKECMDGOALS)),)
+ifneq ($(TARGET_BUILD_APPS)$(filter sdk,$(MAKECMDGOALS)),)
 # DO NOT USE
 # DO NOT USE
 #
 # This architecture / CPU variant must NOT be used for any 64 bit
 # platform builds. It is the lowest common denominator required
 # to build an unbundled application or cts for all supported 32 and 64 bit
-# platforms.
+# platforms. It now recommended to use generic_arm64_plus_armv7 to achieve this.
 #
 # If you're building a 64 bit platform (and not an application) the
 # ARM-v8 specification allows you to assume all the features available in an
@@ -52,45 +52,12 @@ TARGET_2ND_ARCH_VARIANT := armv8-a
 TARGET_2ND_CPU_VARIANT := generic
 endif
 
+# Include 64-bit mediaserver to support 64-bit only devices
+TARGET_DYNAMIC_64_32_MEDIASERVER := true
+# Include 64-bit drmserver to support 64-bit only devices
+TARGET_DYNAMIC_64_32_DRMSERVER := true
+
 include build/make/target/board/BoardConfigGsiCommon.mk
-
-BOARD_KERNEL-4.19-GZ_BOOTIMAGE_PARTITION_SIZE := 47185920
-BOARD_KERNEL-5.4_BOOTIMAGE_PARTITION_SIZE := 67108864
-BOARD_KERNEL-5.4-ALLSYMS_BOOTIMAGE_PARTITION_SIZE := 67108864
-BOARD_KERNEL-5.4-GZ_BOOTIMAGE_PARTITION_SIZE := 47185920
-BOARD_KERNEL-5.4-GZ-ALLSYMS_BOOTIMAGE_PARTITION_SIZE := 47185920
-BOARD_KERNEL-5.4-LZ4_BOOTIMAGE_PARTITION_SIZE := 53477376
-BOARD_KERNEL-5.4-LZ4-ALLSYMS_BOOTIMAGE_PARTITION_SIZE := 53477376
-BOARD_KERNEL-MAINLINE_BOOTIMAGE_PARTITION_SIZE := 67108864
-BOARD_KERNEL-MAINLINE-GZ_BOOTIMAGE_PARTITION_SIZE := 47185920
-BOARD_KERNEL-MAINLINE-LZ4_BOOTIMAGE_PARTITION_SIZE := 53477376
-
-BOARD_USERDATAIMAGE_PARTITION_SIZE := 576716800
-
-BOARD_RAMDISK_USE_LZ4 := true
-BOARD_BOOT_HEADER_VERSION := 3
-BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
-
-BOARD_KERNEL_BINARIES := kernel-4.19-gz kernel-5.4 kernel-5.4-gz kernel-5.4-lz4 \
-    kernel-mainline kernel-mainline-gz kernel-mainline-lz4
-ifneq (,$(filter userdebug eng,$(TARGET_BUILD_VARIANT)))
-BOARD_KERNEL_BINARIES += kernel-5.4-allsyms kernel-5.4-gz-allsyms kernel-5.4-lz4-allsyms
-endif
-
-# Boot image
-BOARD_USES_RECOVERY_AS_BOOT :=
-TARGET_NO_KERNEL := false
-BOARD_USES_GENERIC_KERNEL_IMAGE := true
-BOARD_KERNEL_MODULE_INTERFACE_VERSIONS := 5.4-android12-0
-# Copy boot image in $OUT to target files. This is defined for targets where
-# the installed GKI APEXes are built from source.
-BOARD_COPY_BOOT_IMAGE_TO_TARGET_FILES := true
-
-# No vendor_boot
-BOARD_MOVE_RECOVERY_RESOURCES_TO_VENDOR_BOOT :=
-
-# No recovery
-BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE :=
 
 # Some vendors still haven't cleaned up all device specific directories under
 # root!
@@ -99,6 +66,8 @@ BOARD_EXCLUDE_KERNEL_FROM_RECOVERY_IMAGE :=
 BOARD_ROOT_EXTRA_SYMLINKS += /vendor/lib/dsp:/dsp
 BOARD_ROOT_EXTRA_SYMLINKS += /mnt/vendor/persist:/persist
 BOARD_ROOT_EXTRA_SYMLINKS += /vendor/firmware_mnt:/firmware
+# for Android.bp
+TARGET_ADD_ROOT_EXTRA_VENDOR_SYMLINKS := true
 
 # TODO(b/36764215): remove this setting when the generic system image
 # no longer has QCOM-specific directories under /.

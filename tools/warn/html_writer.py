@@ -15,6 +15,9 @@
 
 """Emit warning messages to html or csv files."""
 
+# Many functions in this module have too many arguments to be refactored.
+# pylint:disable=too-many-arguments,missing-function-docstring
+
 # To emit html page of warning messages:
 #   flags: --byproject, --url, --separator
 # Old stuff for static html components:
@@ -52,16 +55,21 @@
 #   emit_js_data():
 
 from __future__ import print_function
-import cgi
 import csv
+import datetime
+import html
 import sys
 
 # pylint:disable=relative-beyond-top-level
-# pylint:disable=g-importing-member
 from .severity import Severity
 
 
-html_head_scripts = """\
+# Report files with this number of warnings or more.
+LIMIT_WARNINGS_PER_FILE = 100
+# Report files/directories with this percentage of total warnings or more.
+LIMIT_PERCENT_WARNINGS = 1
+
+HTML_HEAD_SCRIPTS = """\
   <script type="text/javascript">
   function expand(id) {
     var e = document.getElementById(id);
@@ -87,12 +95,13 @@ html_head_scripts = """\
   </script>
   <style type="text/css">
   th,td{border-collapse:collapse; border:1px solid black;}
-  .button{color:blue;font-size:110%;font-weight:bolder;}
+  .button{color:blue;font-size:100%;font-weight:bolder;}
   .bt{color:black;background-color:transparent;border:none;outline:none;
       font-size:140%;font-weight:bolder;}
   .c0{background-color:#e0e0e0;}
   .c1{background-color:#d0d0d0;}
   .t1{border-collapse:collapse; width:100%; border:1px solid black;}
+  .box{margin:5pt; padding:5pt; border:1px solid;}
   </style>
   <script src="https://www.gstatic.com/charts/loader.js"></script>
 """
@@ -113,7 +122,7 @@ def html_big(param):
 def dump_html_prologue(title, writer, warn_patterns, project_names):
   writer('<html>\n<head>')
   writer('<title>' + title + '</title>')
-  writer(html_head_scripts)
+  writer(HTML_HEAD_SCRIPTS)
   emit_stats_by_project(writer, warn_patterns, project_names)
   writer('</head>\n<body>')
   writer(html_big(title))
@@ -142,18 +151,16 @@ def create_warnings(warn_patterns, project_names):
     2D warnings array where warnings[p][s] is # of warnings in project name p of
     severity level s
   """
-  # pylint:disable=g-complex-comprehension
   warnings = {p: {s.value: 0 for s in Severity.levels} for p in project_names}
-  for i in warn_patterns:
-    s = i['severity'].value
-    for p in i['projects']:
-      warnings[p][s] += i['projects'][p]
+  for pattern in warn_patterns:
+    value = pattern['severity'].value
+    for project in pattern['projects']:
+      warnings[project][value] += pattern['projects'][project]
   return warnings
 
 
 def get_total_by_project(warnings, project_names):
   """Returns dict, project as key and # warnings for that project as value."""
-  # pylint:disable=g-complex-comprehension
   return {
       p: sum(warnings[p][s.value] for s in Severity.levels)
       for p in project_names
@@ -162,7 +169,6 @@ def get_total_by_project(warnings, project_names):
 
 def get_total_by_severity(warnings, project_names):
   """Returns dict, severity as key and # warnings of that severity as value."""
-  # pylint:disable=g-complex-comprehension
   return {
       s.value: sum(warnings[p][s.value] for p in project_names)
       for s in Severity.levels
@@ -173,11 +179,11 @@ def emit_table_header(total_by_severity):
   """Returns list of HTML-formatted content for severity stats."""
 
   stats_header = ['Project']
-  for s in Severity.levels:
-    if total_by_severity[s.value]:
+  for severity in Severity.levels:
+    if total_by_severity[severity.value]:
       stats_header.append(
           '<span style=\'background-color:{}\'>{}</span>'.format(
-              s.color, s.column_header))
+              severity.color, severity.column_header))
   stats_header.append('TOTAL')
   return stats_header
 
@@ -200,15 +206,15 @@ def emit_row_counts_per_project(warnings, total_by_project, total_by_severity,
 
   total_all_projects = 0
   stats_rows = []
-  for p in project_names:
-    if total_by_project[p]:
-      one_row = [p]
-      for s in Severity.levels:
-        if total_by_severity[s.value]:
-          one_row.append(warnings[p][s.value])
-      one_row.append(total_by_project[p])
+  for p_name in project_names:
+    if total_by_project[p_name]:
+      one_row = [p_name]
+      for severity in Severity.levels:
+        if total_by_severity[severity.value]:
+          one_row.append(warnings[p_name][severity.value])
+      one_row.append(total_by_project[p_name])
       stats_rows.append(one_row)
-      total_all_projects += total_by_project[p]
+      total_all_projects += total_by_project[p_name]
   return total_all_projects, stats_rows
 
 
@@ -226,16 +232,16 @@ def emit_row_counts_per_severity(total_by_severity, stats_header, stats_rows,
 
   total_all_severities = 0
   one_row = ['<b>TOTAL</b>']
-  for s in Severity.levels:
-    if total_by_severity[s.value]:
-      one_row.append(total_by_severity[s.value])
-      total_all_severities += total_by_severity[s.value]
+  for severity in Severity.levels:
+    if total_by_severity[severity.value]:
+      one_row.append(total_by_severity[severity.value])
+      total_all_severities += total_by_severity[severity.value]
   one_row.append(total_all_projects)
   stats_rows.append(one_row)
   writer('<script>')
   emit_const_string_array('StatsHeader', stats_header, writer)
   emit_const_object_array('StatsRows', stats_rows, writer)
-  writer(draw_table_javascript)
+  writer(DRAW_TABLE_JAVASCRIPT)
   writer('</script>')
 
 
@@ -246,14 +252,14 @@ def emit_stats_by_project(writer, warn_patterns, project_names):
   total_by_project = get_total_by_project(warnings, project_names)
   total_by_severity = get_total_by_severity(warnings, project_names)
   stats_header = emit_table_header(total_by_severity)
-  total_all_projects, stats_rows = \
-    emit_row_counts_per_project(warnings, total_by_project, total_by_severity, project_names)
+  total_all_projects, stats_rows = emit_row_counts_per_project(
+      warnings, total_by_project, total_by_severity, project_names)
   emit_row_counts_per_severity(total_by_severity, stats_header, stats_rows,
                                total_all_projects, writer)
 
 
 def dump_stats(writer, warn_patterns):
-  """Dump some stats about total number of warnings and such."""
+  """Dump some stats about total number of warnings and date."""
 
   known = 0
   skipped = 0
@@ -274,6 +280,8 @@ def dump_stats(writer, warn_patterns):
   if total < 1000:
     extra_msg = ' (low count may indicate incremental build)'
   writer('Total number of warnings: <b>' + str(total) + '</b>' + extra_msg)
+  date_time_str = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+  writer('<p>(generated on ' + date_time_str + ')')
 
 
 # New base table of warnings, [severity, warn_id, project, warning_message]
@@ -287,14 +295,15 @@ def dump_stats(writer, warn_patterns):
 #     id for each warning pattern
 #     sort by project, severity, warn_id, warning_message
 def emit_buttons(writer):
-  writer('<button class="button" onclick="expandCollapse(1);">'
+  """Write the button elements in HTML."""
+  writer('<p><button class="button" onclick="expandCollapse(1);">'
          'Expand all warnings</button>\n'
          '<button class="button" onclick="expandCollapse(0);">'
          'Collapse all warnings</button>\n'
-         '<button class="button" onclick="groupBySeverity();">'
+         '<p><button class="button" onclick="groupBySeverity();">'
          'Group warnings by severity</button>\n'
          '<button class="button" onclick="groupByProject();">'
-         'Group warnings by project</button><br>')
+         'Group warnings by project</button>')
 
 
 def all_patterns(category):
@@ -327,8 +336,9 @@ def dump_fixed(writer, warn_patterns):
   for text in fixed_patterns:
     cur_row_class = 1 - cur_row_class
     # remove last '\n'
-    t = text[:-1] if text[-1] == '\n' else text
-    writer('<tr><td class="c' + str(cur_row_class) + '">' + t + '</td></tr>')
+    out_text = text[:-1] if text[-1] == '\n' else text
+    writer('<tr><td class="c' + str(cur_row_class) + '">'
+           + out_text + '</td></tr>')
   writer('</table></div>')
   writer('</blockquote>')
 
@@ -338,10 +348,10 @@ def write_severity(csvwriter, sev, kind, warn_patterns):
   total = 0
   for pattern in warn_patterns:
     if pattern['severity'] == sev and pattern['members']:
-      n = len(pattern['members'])
-      total += n
+      num_members = len(pattern['members'])
+      total += num_members
       warning = kind + ': ' + (pattern['description'] or '?')
-      csvwriter.writerow([n, '', warning])
+      csvwriter.writerow([num_members, '', warning])
       # print number of warnings for each project, ordered by project name
       projects = sorted(pattern['projects'].keys())
       for project in projects:
@@ -354,8 +364,9 @@ def dump_csv(csvwriter, warn_patterns):
   """Dump number of warnings in CSV format to writer."""
   sort_warnings(warn_patterns)
   total = 0
-  for s in Severity.levels:
-    total += write_severity(csvwriter, s, s.column_header, warn_patterns)
+  for severity in Severity.levels:
+    total += write_severity(
+        csvwriter, severity, severity.column_header, warn_patterns)
   csvwriter.writerow([total, '', 'All warnings'])
 
 
@@ -378,41 +389,41 @@ def dump_csv_with_description(csvwriter, warning_records, warning_messages,
     csvwriter.writerow(output)
 
 
-# Return s with escaped backslash and quotation characters.
-def escape_string(s):
-  return s.replace('\\', '\\\\').replace('"', '\\"')
+# Return line with escaped backslash and quotation characters.
+def escape_string(line):
+  return line.replace('\\', '\\\\').replace('"', '\\"')
 
 
-# Return s without trailing '\n' and escape the quotation characters.
-def strip_escape_string(s):
-  if not s:
-    return s
-  s = s[:-1] if s[-1] == '\n' else s
-  return escape_string(s)
+# Return line without trailing '\n' and escape the quotation characters.
+def strip_escape_string(line):
+  if not line:
+    return line
+  line = line[:-1] if line[-1] == '\n' else line
+  return escape_string(line)
 
 
 def emit_warning_array(name, writer, warn_patterns):
   writer('var warning_{} = ['.format(name))
-  for w in warn_patterns:
+  for pattern in warn_patterns:
     if name == 'severity':
-      writer('{},'.format(w[name].value))
+      writer('{},'.format(pattern[name].value))
     else:
-      writer('{},'.format(w[name]))
+      writer('{},'.format(pattern[name]))
   writer('];')
 
 
 def emit_warning_arrays(writer, warn_patterns):
   emit_warning_array('severity', writer, warn_patterns)
   writer('var warning_description = [')
-  for w in warn_patterns:
-    if w['members']:
-      writer('"{}",'.format(escape_string(w['description'])))
+  for pattern in warn_patterns:
+    if pattern['members']:
+      writer('"{}",'.format(escape_string(pattern['description'])))
     else:
       writer('"",')  # no such warning
   writer('];')
 
 
-scripts_for_warning_groups = """
+SCRIPTS_FOR_WARNING_GROUPS = """
   function compareMessages(x1, x2) { // of the same warning type
     return (WarningMessages[x1[2]] <= WarningMessages[x2[2]]) ? -1 : 1;
   }
@@ -557,6 +568,11 @@ scripts_for_warning_groups = """
 """
 
 
+# Emit a JavaScript const number
+def emit_const_number(name, value, writer):
+  writer('const ' + name + ' = ' + str(value) + ';')
+
+
 # Emit a JavaScript const string
 def emit_const_string(name, value, writer):
   writer('const ' + name + ' = "' + escape_string(value) + '";')
@@ -565,35 +581,32 @@ def emit_const_string(name, value, writer):
 # Emit a JavaScript const integer array.
 def emit_const_int_array(name, array, writer):
   writer('const ' + name + ' = [')
-  for n in array:
-    writer(str(n) + ',')
+  for item in array:
+    writer(str(item) + ',')
   writer('];')
 
 
 # Emit a JavaScript const string array.
 def emit_const_string_array(name, array, writer):
   writer('const ' + name + ' = [')
-  for s in array:
-    writer('"' + strip_escape_string(s) + '",')
+  for item in array:
+    writer('"' + strip_escape_string(item) + '",')
   writer('];')
 
 
 # Emit a JavaScript const string array for HTML.
 def emit_const_html_string_array(name, array, writer):
   writer('const ' + name + ' = [')
-  for s in array:
-    # Not using html.escape yet, to work for both python 2 and 3,
-    # until all users switch to python 3.
-    # pylint:disable=deprecated-method
-    writer('"' + cgi.escape(strip_escape_string(s)) + '",')
+  for item in array:
+    writer('"' + html.escape(strip_escape_string(item)) + '",')
   writer('];')
 
 
 # Emit a JavaScript const object array.
 def emit_const_object_array(name, array, writer):
   writer('const ' + name + ' = [')
-  for x in array:
-    writer(str(x) + ',')
+  for item in array:
+    writer(str(item) + ',')
   writer('];')
 
 
@@ -603,6 +616,8 @@ def emit_js_data(writer, flags, warning_messages, warning_links,
   emit_const_string('FlagPlatform', flags.platform, writer)
   emit_const_string('FlagURL', flags.url, writer)
   emit_const_string('FlagSeparator', flags.separator, writer)
+  emit_const_number('LimitWarningsPerFile', LIMIT_WARNINGS_PER_FILE, writer)
+  emit_const_number('LimitPercentWarnings', LIMIT_PERCENT_WARNINGS, writer)
   emit_const_string_array('SeverityColors', [s.color for s in Severity.levels],
                           writer)
   emit_const_string_array('SeverityHeaders',
@@ -623,10 +638,10 @@ def emit_js_data(writer, flags, warning_messages, warning_links,
     emit_const_html_string_array('WarningLinks', warning_links, writer)
 
 
-draw_table_javascript = """
+DRAW_TABLE_JAVASCRIPT = """
 google.charts.load('current', {'packages':['table']});
-google.charts.setOnLoadCallback(drawTable);
-function drawTable() {
+google.charts.setOnLoadCallback(genTables);
+function genSelectedProjectsTable() {
   var data = new google.visualization.DataTable();
   data.addColumn('string', StatsHeader[0]);
   for (var i=1; i<StatsHeader.length; i++) {
@@ -639,12 +654,184 @@ function drawTable() {
     }
   }
   var table = new google.visualization.Table(
-      document.getElementById('stats_table'));
+      document.getElementById('selected_projects_section'));
   table.draw(data, {allowHtml: true, alternatingRowStyle: true});
+}
+// Global TopDirs and TopFiles are computed later by genTables.
+window.TopDirs = [];
+window.TopFiles = [];
+function computeTopDirsFiles() {
+  var numWarnings = WarningMessages.length;
+  var warningsOfFiles = {};
+  var warningsOfDirs = {};
+  var subDirs = {};
+  function addOneWarning(map, key, type, unique) {
+    function increaseCounter(idx) {
+      map[idx] = 1 + ((idx in map) ? map[idx] : 0);
+    }
+    increaseCounter(key)
+    if (type != "") {
+      increaseCounter(type + " " + key)
+      if (unique) {
+        increaseCounter(type + " *")
+      }
+    }
+  }
+  for (var i = 0; i < numWarnings; i++) {
+    var message = WarningMessages[i]
+    var file = message.replace(/:.*/, "");
+    var warningType = message.endsWith("]") ? message.replace(/.*\[/, "[") : "";
+    addOneWarning(warningsOfFiles, file, warningType, true);
+    var dirs = file.split("/");
+    var dir = dirs[0];
+    addOneWarning(warningsOfDirs, dir, warningType, true);
+    for (var d = 1; d < dirs.length - 1; d++) {
+      var subDir = dir + "/" + dirs[d];
+      if (!(dir in subDirs)) {
+        subDirs[dir] = {};
+      }
+      subDirs[dir][subDir] = 1;
+      dir = subDir;
+      addOneWarning(warningsOfDirs, dir, warningType, false);
+    }
+  }
+  var minDirWarnings = numWarnings*(LimitPercentWarnings/100);
+  var minFileWarnings = Math.min(LimitWarningsPerFile, minDirWarnings);
+  // Each row in TopDirs and TopFiles has
+  // [index, {v:<num_of_warnings>, f:<percent>}, file_or_dir_name]
+  function countWarnings(minWarnings, warningsOf, isDir) {
+    var rows = [];
+    for (var name in warningsOf) {
+      if (isDir && name in subDirs && Object.keys(subDirs[name]).length < 2) {
+        continue; // skip a directory if it has only one subdir
+      }
+      var count = warningsOf[name];
+      if (count >= minWarnings) {
+        name = isDir ? (name + "/...") : name;
+        var percent = (100*count/numWarnings).toFixed(1);
+        var countFormat = count + ' (' + percent + '%)';
+        rows.push([0, {v:count, f:countFormat}, name]);
+      }
+    }
+    rows.sort((a,b) => b[1].v - a[1].v);
+    for (var i=0; i<rows.length; i++) {
+      rows[i][0] = i;
+    }
+    return rows;
+  }
+  TopDirs = countWarnings(minDirWarnings, warningsOfDirs, true);
+  TopFiles = countWarnings(minFileWarnings, warningsOfFiles, false);
+}
+function genTopDirsFilesTables() {
+  computeTopDirsFiles();
+  function addTable(name, divName, rows, clickFunction) {
+    var data = new google.visualization.DataTable();
+    data.addColumn("number", "index"); // not shown in view
+    data.addColumn("number", "# of warnings");
+    data.addColumn("string", name);
+    data.addRows(rows);
+    var formatter = new google.visualization.PatternFormat(
+      '<p onclick="' + clickFunction + '({0})">{2}</p>');
+    formatter.format(data, [0, 1, 2], 2);
+    var view = new google.visualization.DataView(data);
+    view.setColumns([1,2]); // hide the index column
+    var table = new google.visualization.Table(
+        document.getElementById(divName));
+    table.draw(view, {allowHtml: true, alternatingRowStyle: true});
+  }
+  addTable("[Warning Type] Directory", "top_dirs_table", TopDirs, "selectDir");
+  addTable("[Warning Type] File", "top_files_table", TopFiles, "selectFile");
+}
+function selectDirFile(idx, rows, dirFile) {
+  if (rows.length <= idx) {
+    return;
+  }
+  var name = rows[idx][2];
+  var type = "";
+  if (name.startsWith("[")) {
+    type = " " + name.replace(/ .*/, "");
+    name = name.replace(/.* /, "");
+  }
+  var spanName = "selected_" + dirFile + "_name";
+  document.getElementById(spanName).innerHTML = name + type;
+  var divName = "selected_" + dirFile + "_warnings";
+  var numWarnings = rows[idx][1].v;
+  var prefix = name.replace(/\\.\\.\\.$/, "");
+  var data = new google.visualization.DataTable();
+  data.addColumn('string', numWarnings + type + ' warnings in ' + name);
+  var getWarningMessage = (FlagPlatform == "chrome")
+        ? ((x) => addURLToLine(WarningMessages[Warnings[x][2]],
+                               WarningLinks[Warnings[x][3]]))
+        : ((x) => addURL(WarningMessages[Warnings[x][2]]));
+  for (var i = 0; i < Warnings.length; i++) {
+    if ((prefix.startsWith("*") || WarningMessages[Warnings[i][2]].startsWith(prefix)) &&
+        (type == "" || WarningMessages[Warnings[i][2]].endsWith(type))) {
+      data.addRow([getWarningMessage(i)]);
+    }
+  }
+  var table = new google.visualization.Table(
+      document.getElementById(divName));
+  table.draw(data, {allowHtml: true, alternatingRowStyle: true});
+}
+function selectDir(idx) {
+  selectDirFile(idx, TopDirs, "directory")
+}
+function selectFile(idx) {
+  selectDirFile(idx, TopFiles, "file");
+}
+function genTables() {
+  genSelectedProjectsTable();
+  if (WarningMessages.length > 1) {
+    genTopDirsFilesTables();
+  }
 }
 """
 
 
+def dump_boxed_section(writer, func):
+  writer('<div class="box">')
+  func()
+  writer('</div>')
+
+
+def dump_section_header(writer, table_name, section_title):
+  writer('<h3><b><button id="' + table_name + '_mark" class="bt"\n' +
+         ' onclick="expand(\'' + table_name + '\');">&#x2295</button></b>\n' +
+         section_title + '</h3>')
+
+
+def dump_table_section(writer, table_name, section_title):
+  dump_section_header(writer, table_name, section_title)
+  writer('<div id="' + table_name + '" style="display:none;"></div>')
+
+
+def dump_dir_file_section(writer, dir_file, table_name, section_title):
+  section_name = 'top_' + dir_file + '_section'
+  dump_section_header(writer, section_name, section_title)
+  writer('<div id="' + section_name + '" style="display:none;">')
+  writer('<div id="' + table_name + '"></div>')
+  def subsection():
+    subsection_name = 'selected_' + dir_file + '_warnings'
+    subsection_title = ('Warnings in <span id="selected_' + dir_file +
+                        '_name">(click a ' + dir_file +
+                        ' in the above table)</span>')
+    dump_section_header(writer, subsection_name, subsection_title)
+    writer('<div id="' + subsection_name + '" style="display:none;"></div>')
+  dump_boxed_section(writer, subsection)
+  writer('</div>')
+
+
+# HTML output has the following major div elements:
+#  selected_projects_section
+#  top_directory_section
+#    top_dirs_table
+#    selected_directory_warnings
+#  top_file_section
+#    top_files_table
+#    selected_file_warnings
+#  all_warnings_section
+#    warning_groups
+#    fixed_warnings
 def dump_html(flags, output_stream, warning_messages, warning_links,
               warning_records, header_str, warn_patterns, project_names):
   """Dump the flags output to output_stream."""
@@ -652,20 +839,44 @@ def dump_html(flags, output_stream, warning_messages, warning_links,
   dump_html_prologue('Warnings for ' + header_str, writer, warn_patterns,
                      project_names)
   dump_stats(writer, warn_patterns)
-  writer('<br><div id="stats_table"></div><br>')
-  writer('\n<script>')
-  emit_js_data(writer, flags, warning_messages, warning_links, warning_records,
-               warn_patterns, project_names)
-  writer(scripts_for_warning_groups)
-  writer('</script>')
-  emit_buttons(writer)
-  # Warning messages are grouped by severities or project names.
-  writer('<br><div id="warning_groups"></div>')
-  if flags.byproject:
-    writer('<script>groupByProject();</script>')
-  else:
-    writer('<script>groupBySeverity();</script>')
-  dump_fixed(writer, warn_patterns)
+  writer('<br><br>Press &#x2295 to show section content,'
+         ' and &#x2296 to hide the content.')
+  def section1():
+    dump_table_section(writer, 'selected_projects_section',
+                       'Number of warnings in preselected project directories')
+  def section2():
+    dump_dir_file_section(
+        writer, 'directory', 'top_dirs_table',
+        'Directories/Warnings with at least ' +
+        str(LIMIT_PERCENT_WARNINGS) + '% of all cases')
+  def section3():
+    dump_dir_file_section(
+        writer, 'file', 'top_files_table',
+        'Files/Warnings with at least ' +
+        str(LIMIT_PERCENT_WARNINGS) + '% of all or ' +
+        str(LIMIT_WARNINGS_PER_FILE) + ' cases')
+  def section4():
+    writer('<script>')
+    emit_js_data(writer, flags, warning_messages, warning_links,
+                 warning_records, warn_patterns, project_names)
+    writer(SCRIPTS_FOR_WARNING_GROUPS)
+    writer('</script>')
+    dump_section_header(writer, 'all_warnings_section',
+                        'All warnings grouped by severities or projects')
+    writer('<div id="all_warnings_section" style="display:none;">')
+    emit_buttons(writer)
+    # Warning messages are grouped by severities or project names.
+    writer('<br><div id="warning_groups"></div>')
+    if flags.byproject:
+      writer('<script>groupByProject();</script>')
+    else:
+      writer('<script>groupBySeverity();</script>')
+    dump_fixed(writer, warn_patterns)
+    writer('</div>')
+  dump_boxed_section(writer, section1)
+  dump_boxed_section(writer, section2)
+  dump_boxed_section(writer, section3)
+  dump_boxed_section(writer, section4)
   dump_html_epilogue(writer)
 
 
@@ -673,8 +884,8 @@ def write_html(flags, project_names, warn_patterns, html_path, warning_messages,
                warning_links, warning_records, header_str):
   """Write warnings html file."""
   if html_path:
-    with open(html_path, 'w') as f:
-      dump_html(flags, f, warning_messages, warning_links, warning_records,
+    with open(html_path, 'w') as outf:
+      dump_html(flags, outf, warning_messages, warning_links, warning_records,
                 header_str, warn_patterns, project_names)
 
 
@@ -682,12 +893,12 @@ def write_out_csv(flags, warn_patterns, warning_messages, warning_links,
                   warning_records, header_str, project_names):
   """Write warnings csv file."""
   if flags.csvpath:
-    with open(flags.csvpath, 'w') as f:
-      dump_csv(csv.writer(f, lineterminator='\n'), warn_patterns)
+    with open(flags.csvpath, 'w') as outf:
+      dump_csv(csv.writer(outf, lineterminator='\n'), warn_patterns)
 
   if flags.csvwithdescription:
-    with open(flags.csvwithdescription, 'w') as f:
-      dump_csv_with_description(csv.writer(f, lineterminator='\n'),
+    with open(flags.csvwithdescription, 'w') as outf:
+      dump_csv_with_description(csv.writer(outf, lineterminator='\n'),
                                 warning_records, warning_messages,
                                 warn_patterns, project_names)
 

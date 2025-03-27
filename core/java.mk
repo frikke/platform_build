@@ -83,8 +83,6 @@ LOCAL_INTERMEDIATE_TARGETS += \
     $(full_classes_stubs_jar) \
     $(java_source_list_file)
 
-LOCAL_INTERMEDIATE_SOURCE_DIR := $(intermediates.COMMON)/src
-
 ###########################################################
 ## AIDL: Compile .aidl files to .java
 ###########################################################
@@ -142,8 +140,7 @@ ifneq ($(strip $(logtags_sources)),)
 logtags_java_sources := $(patsubst %.logtags,%.java,$(addprefix $(intermediates.COMMON)/logtags/, $(logtags_sources)))
 logtags_sources := $(addprefix $(LOCAL_PATH)/, $(logtags_sources))
 
-$(logtags_java_sources): PRIVATE_MERGED_TAG := $(TARGET_OUT_COMMON_INTERMEDIATES)/all-event-log-tags.txt
-$(logtags_java_sources): $(intermediates.COMMON)/logtags/%.java: $(LOCAL_PATH)/%.logtags $(TARGET_OUT_COMMON_INTERMEDIATES)/all-event-log-tags.txt $(JAVATAGS) build/make/tools/event_log_tags.py
+$(logtags_java_sources): $(intermediates.COMMON)/logtags/%.java: $(LOCAL_PATH)/%.logtags $(JAVATAGS)
 	$(transform-logtags-to-java)
 
 else
@@ -176,7 +173,9 @@ endif
 
 #######################################
 # defines built_odex along with rule to install odex
+my_manifest_or_apk := $(full_android_manifest)
 include $(BUILD_SYSTEM)/dex_preopt_odex_install.mk
+my_manifest_or_apk :=
 #######################################
 
 # Make sure there's something to build.
@@ -198,10 +197,6 @@ ifdef full_classes_jar
 $(eval $(call copy-one-file,$(full_classes_jar),$(full_classes_stubs_jar)))
 ALL_MODULES.$(my_register_name).STUBS := $(full_classes_stubs_jar)
 
-# The layers file allows you to enforce a layering between java packages.
-# Run build/make/tools/java-layers.py for more details.
-layers_file := $(addprefix $(LOCAL_PATH)/, $(LOCAL_JAVA_LAYERS_FILE))
-$(full_classes_compiled_jar): PRIVATE_JAVA_LAYERS_FILE := $(layers_file)
 $(full_classes_compiled_jar): PRIVATE_WARNINGS_ENABLE := $(LOCAL_WARNINGS_ENABLE)
 
 # Compile the java files to a .jar file.
@@ -253,8 +248,7 @@ $(full_classes_turbine_jar): \
 ifneq ($(strip $(LOCAL_JARJAR_RULES)),)
 $(full_classes_header_jarjar): PRIVATE_JARJAR_RULES := $(LOCAL_JARJAR_RULES)
 $(full_classes_header_jarjar): $(full_classes_turbine_jar) $(LOCAL_JARJAR_RULES) | $(JARJAR)
-	@echo Header JarJar: $@
-	$(hide) $(JAVA) -jar $(JARJAR) process $(PRIVATE_JARJAR_RULES) $< $@
+	$(call transform-jarjar)
 else
 full_classes_header_jarjar := $(full_classes_turbine_jar)
 endif
@@ -265,6 +259,7 @@ endif # TURBINE_ENABLED != false
 
 # TODO(b/143658984): goma can't handle the --system argument to javac.
 #$(full_classes_compiled_jar): .KATI_NINJA_POOL := $(GOMA_POOL)
+$(full_classes_compiled_jar): .KATI_NINJA_POOL := $(JAVAC_NINJA_POOL)
 $(full_classes_compiled_jar): PRIVATE_JAVACFLAGS := $(LOCAL_JAVACFLAGS) $(annotation_processor_flags)
 $(full_classes_compiled_jar): PRIVATE_JAR_EXCLUDE_FILES := $(LOCAL_JAR_EXCLUDE_FILES)
 $(full_classes_compiled_jar): PRIVATE_JAR_PACKAGES := $(LOCAL_JAR_PACKAGES)
@@ -298,9 +293,7 @@ $(full_classes_combined_jar): PRIVATE_DONT_DELETE_JAR_META_INF := $(LOCAL_DONT_D
 $(full_classes_combined_jar): $(full_classes_compiled_jar) \
                               $(jar_manifest_file) \
                               $(full_static_java_libs) | $(MERGE_ZIPS)
-	$(if $(PRIVATE_JAR_MANIFEST), $(hide) sed -e "s/%BUILD_NUMBER%/$(BUILD_NUMBER_FROM_FILE)/" \
-            $(PRIVATE_JAR_MANIFEST) > $(dir $@)/manifest.mf)
-	$(MERGE_ZIPS) -j --ignore-duplicates $(if $(PRIVATE_JAR_MANIFEST),-m $(dir $@)/manifest.mf) \
+	$(MERGE_ZIPS) -j --ignore-duplicates $(if $(PRIVATE_JAR_MANIFEST),-m $(PRIVATE_JAR_MANIFEST)) \
             $(if $(PRIVATE_DONT_DELETE_JAR_META_INF),,-stripDir META-INF -zipToNotStrip $<) \
             $@ $< $(PRIVATE_STATIC_JAVA_LIBRARIES)
 
@@ -334,8 +327,7 @@ endif
 ifneq ($(strip $(LOCAL_JARJAR_RULES)),)
 $(full_classes_jarjar_jar): PRIVATE_JARJAR_RULES := $(LOCAL_JARJAR_RULES)
 $(full_classes_jarjar_jar): $(full_classes_processed_jar) $(LOCAL_JARJAR_RULES) | $(JARJAR)
-	@echo JarJar: $@
-	$(hide) $(JAVA) -jar $(JARJAR) process $(PRIVATE_JARJAR_RULES) $< $@
+	$(call transform-jarjar)
 else
 full_classes_jarjar_jar := $(full_classes_processed_jar)
 endif
@@ -470,6 +462,17 @@ endif
 
 ifneq ($(filter obfuscation,$(LOCAL_PROGUARD_ENABLED)),)
   $(built_dex_intermediate): .KATI_IMPLICIT_OUTPUTS := $(proguard_dictionary) $(proguard_configuration)
+
+  # Make a rule to copy the proguard_dictionary to a packaging directory.
+  $(eval $(call copy-one-file,$(proguard_dictionary),\
+    $(call local-packaging-dir,proguard_dictionary)/proguard_dictionary))
+  $(call add-dependency,$(LOCAL_BUILT_MODULE),\
+    $(call local-packaging-dir,proguard_dictionary)/proguard_dictionary)
+
+  $(eval $(call copy-one-file,$(full_classes_pre_proguard_jar),\
+    $(call local-packaging-dir,proguard_dictionary)/classes.jar))
+  $(call add-dependency,$(LOCAL_BUILT_MODULE),\
+    $(call local-packaging-dir,proguard_dictionary)/classes.jar)
 endif
 
 endif # LOCAL_PROGUARD_ENABLED defined
@@ -478,15 +481,17 @@ ifneq ($(LOCAL_IS_STATIC_JAVA_LIBRARY),true)
 $(built_dex_intermediate): PRIVATE_DX_FLAGS := $(LOCAL_DX_FLAGS)
 
 ifdef LOCAL_PROGUARD_ENABLED
+  $(built_dex_intermediate): .KATI_NINJA_POOL := $(R8_NINJA_POOL)
   $(built_dex_intermediate): PRIVATE_EXTRA_INPUT_JAR := $(extra_input_jar)
   $(built_dex_intermediate): PRIVATE_PROGUARD_FLAGS := $(legacy_proguard_flags) $(common_proguard_flags) $(LOCAL_PROGUARD_FLAGS)
   $(built_dex_intermediate): PRIVATE_PROGUARD_DICTIONARY := $(proguard_dictionary)
-  $(built_dex_intermediate) : $(full_classes_pre_proguard_jar) $(extra_input_jar) $(my_proguard_sdk_raise) $(common_proguard_flag_files) $(legacy_proguard_lib_deps) $(R8_COMPAT_PROGUARD) $(LOCAL_PROGUARD_FLAGS_DEPS)
+  $(built_dex_intermediate) : $(full_classes_pre_proguard_jar) $(extra_input_jar) $(my_proguard_sdk_raise) $(common_proguard_flag_files) $(legacy_proguard_lib_deps) $(R8) $(LOCAL_PROGUARD_FLAGS_DEPS)
 	$(transform-jar-to-dex-r8)
 else # !LOCAL_PROGUARD_ENABLED
+  $(built_dex_intermediate): .KATI_NINJA_POOL := $(D8_NINJA_POOL)
   $(built_dex_intermediate): PRIVATE_D8_LIBS := $(full_java_bootclasspath_libs) $(full_shared_java_header_libs)
   $(built_dex_intermediate): $(full_java_bootclasspath_libs) $(full_shared_java_header_libs)
-  $(built_dex_intermediate): $(full_classes_pre_proguard_jar) $(DX) $(ZIP2ZIP)
+  $(built_dex_intermediate): $(full_classes_pre_proguard_jar) $(D8) $(ZIP2ZIP)
 	$(transform-classes.jar-to-dex)
 endif
 

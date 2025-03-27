@@ -101,6 +101,13 @@ all_res_assets := $(all_resources)
 include $(BUILD_SYSTEM)/java_renderscript.mk
 
 ifeq (true,$(need_compile_res))
+# work around missing manifests by creating a default one
+ifeq (,$(strip $(LOCAL_MANIFEST_FILE)$(LOCAL_FULL_MANIFEST_FILE)))
+  ifeq (,$(wildcard $(LOCAL_PATH)/AndroidManifest.xml))
+    LOCAL_FULL_MANIFEST_FILE := $(call local-intermediates-dir,COMMON)/DefaultManifest.xml
+    $(call create-default-manifest-file,$(LOCAL_FULL_MANIFEST_FILE),$(call module-min-sdk-version))
+  endif
+endif
 include $(BUILD_SYSTEM)/android_manifest.mk
 
 LOCAL_SDK_RES_VERSION:=$(strip $(LOCAL_SDK_RES_VERSION))
@@ -119,6 +126,12 @@ framework_res_package_export := \
     $(call intermediates-dir-for,APPS,framework-res,,COMMON)/package-export.apk
 endif
 endif
+
+# transitive-res-packages is only populated for Soong modules for now, but needs
+# to exist so that other Make modules can depend on it.  Create an empty file.
+my_transitive_res_packages := $(intermediates.COMMON)/transitive-res-packages
+$(my_transitive_res_packages):
+	touch $@
 
 import_proguard_flag_files := $(strip $(foreach l,$(LOCAL_STATIC_ANDROID_LIBRARIES) $(LOCAL_STATIC_JAVA_AAR_LIBRARIES),\
     $(call intermediates-dir-for,JAVA_LIBRARIES,$(l),,COMMON)/export_proguard_flags))
@@ -216,3 +229,5 @@ endif  # need_compile_res
 aar_classes_jar :=
 all_res_assets :=
 LOCAL_IS_STATIC_JAVA_LIBRARY :=
+
+$(if $(my_register_name),$(eval ALL_MODULES.$(my_register_name).MAKE_MODULE_TYPE:=STATIC_JAVA_LIBRARY))

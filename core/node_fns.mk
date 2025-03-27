@@ -83,27 +83,17 @@ endef
 # If needle appears multiple times, only the first occurrance
 # will survive.
 #
-# How it works:
-#
-# - Stick everything in haystack into a single word,
-#   with "|||" separating the words.
-# - Replace occurrances of "|||$(needle)|||" with "||| |||",
-#   breaking haystack back into multiple words, with spaces
-#   where needle appeared.
-# - Add needle between the first and second words of haystack.
-# - Replace "|||" with spaces, breaking haystack back into
-#   individual words.
-#
 define uniq-word
 $(strip \
   $(if $(filter-out 0 1,$(words $(filter $(2),$(1)))), \
-    $(eval h := |||$(subst $(space),|||,$(strip $(1)))|||) \
-    $(eval h := $(subst |||$(strip $(2))|||,|||$(space)|||,$(h))) \
-    $(eval h := $(word 1,$(h)) $(2) $(wordlist 2,9999,$(h))) \
-    $(subst |||,$(space),$(h)) \
-   , \
-    $(1) \
- ))
+    $(eval _uniq_word_seen :=) \
+    $(foreach w,$(1), \
+      $(if $(filter $(2),$(w)), \
+        $(if $(_uniq_word_seen),, \
+          $(w) \
+          $(eval _uniq_word_seen := true)), \
+        $(w))), \
+  $(1)))
 endef
 
 INHERIT_TAG := @inherit:
@@ -195,7 +185,11 @@ define _import-node
   $(call clear-var-list, $(3))
   $(eval LOCAL_PATH := $(patsubst %/,%,$(dir $(2))))
   $(eval MAKEFILE_LIST :=)
+  $(call dump-import-start,$(_include_stack))
+  $(call dump-config-vals,$(2),before)
   $(eval include $(2))
+  $(call dump-import-done,$(_include_stack))
+  $(call dump-config-vals,$(2),after)
   $(eval _included := $(filter-out $(2),$(MAKEFILE_LIST)))
   $(eval MAKEFILE_LIST :=)
   $(eval LOCAL_PATH :=)
@@ -204,12 +198,12 @@ define _import-node
 
   $(eval $(1).$(2).inherited := \
       $(call get-inherited-nodes,$(1).$(2),$(3)))
-  $(call _import-nodes-inner,$(1),$($(1).$(2).inherited),$(3))
+  $(call _import-nodes-inner,$(1),$($(1).$(2).inherited),$(3),$(4))
 
   $(call _expand-inherited-values,$(1),$(2),$(3),$(4))
 
   $(eval $(1).$(2).inherited :=)
-  $(eval _include_stack := $(wordlist 2,9999,$$(_include_stack)))
+  $(eval _include_stack := $(wordlist 2,9999,$(_include_stack)))
 endef
 
 #
@@ -250,6 +244,7 @@ endef
 #       of the default list semantics
 #
 define import-nodes
+$(call dump-phase-start,$(1),$(2),$(3),$(4),build/make/core/node_fns.mk) \
 $(if \
   $(foreach _in,$(2), \
     $(eval _node_import_context := _nic.$(1).[[$(_in)]]) \
@@ -263,5 +258,6 @@ $(if \
     $(if $(_include_stack),$(eval $(error ASSERTION FAILED: _include_stack \
                 should be empty here: $(_include_stack))),) \
    ) \
-,)
+,) \
+$(call dump-phase-end,build/make/core/node_fns.mk)
 endef

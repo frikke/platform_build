@@ -17,6 +17,8 @@
 import argparse
 import sys
 
+from uffd_gc_utils import should_enable_uffd_gc
+
 # Usage: post_process_props.py file.prop [disallowed_key, ...]
 # Disallowed keys are removed from the property file, if present
 
@@ -27,7 +29,7 @@ PROP_VALUE_MAX = 91
 
 # Put the modifications that you need to make into the */build.prop into this
 # function.
-def mangle_build_prop(prop_list):
+def mangle_build_prop(prop_list, kernel_version_file_for_uffd_gc):
   # If ro.debuggable is 1, then enable adb on USB by default
   # (this is for userdebug builds)
   if prop_list.get_value("ro.debuggable") == "1":
@@ -38,11 +40,33 @@ def mangle_build_prop(prop_list):
       else:
         val = val + ",adb"
       prop_list.put("persist.sys.usb.config", val)
-  # UsbDeviceManager expects a value here.  If it doesn't get it, it will
-  # default to "adb". That might not the right policy there, but it's better
-  # to be explicit.
-  if not prop_list.get_value("persist.sys.usb.config"):
-    prop_list.put("persist.sys.usb.config", "none");
+  if prop_list.get_value("ro.dalvik.vm.enable_uffd_gc") == "default":
+    assert kernel_version_file_for_uffd_gc != ""
+    enable_uffd_gc = should_enable_uffd_gc(kernel_version_file_for_uffd_gc)
+    prop_list.put("ro.dalvik.vm.enable_uffd_gc",
+                  "true" if enable_uffd_gc else "false")
+
+def validate_grf_props(prop_list):
+  """Validate GRF properties if exist.
+
+  If ro.board.first_api_level is defined, check if its value is valid.
+
+  Returns:
+    True if the GRF properties are valid.
+  """
+  grf_api_level = prop_list.get_value("ro.board.first_api_level")
+  board_api_level = prop_list.get_value("ro.board.api_level")
+
+  if grf_api_level and board_api_level:
+    grf_api_level = int(grf_api_level)
+    board_api_level = int(board_api_level)
+    if board_api_level < grf_api_level:
+      sys.stderr.write("error: ro.board.api_level(%d) must not be less than "
+                       "ro.board.first_api_level(%d)\n"
+                       % (board_api_level, grf_api_level))
+      return False
+
+  return True
 
 def validate(prop_list):
   """Validate the properties.
@@ -215,6 +239,8 @@ def main(argv):
                       default=False)
   parser.add_argument("filename")
   parser.add_argument("disallowed_keys", metavar="KEY", type=str, nargs="*")
+  parser.add_argument("--sdk-version", type=int, required=True)
+  parser.add_argument("--kernel-version-file-for-uffd-gc", required=True)
   args = parser.parse_args()
 
   if not args.filename.endswith("/build.prop"):
@@ -222,8 +248,10 @@ def main(argv):
     sys.exit(1)
 
   props = PropList(args.filename)
-  mangle_build_prop(props)
+  mangle_build_prop(props, args.kernel_version_file_for_uffd_gc)
   if not override_optional_props(props, args.allow_dup):
+    sys.exit(1)
+  if not validate_grf_props(props):
     sys.exit(1)
   if not validate(props):
     sys.exit(1)

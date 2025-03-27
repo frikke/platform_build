@@ -85,40 +85,7 @@ $(my_extracted_apk): $(my_prebuilt_src_file)
 my_prebuilt_src_file := $(my_extracted_apk)
 my_extracted_apk :=
 my_extract_apk :=
-ifeq ($(PRODUCT_ALWAYS_PREOPT_EXTRACTED_APK),true)
-# If the product property is set, always preopt for extracted modules to prevent executing out of
-# the APK.
-my_preopt_for_extracted_apk := true
 endif
-endif
-
-# Verify LOCAL_USES_LIBRARIES/LOCAL_OPTIONAL_USES_LIBRARIES
-# If LOCAL_ENFORCE_USES_LIBRARIES is not set, default to true if either of LOCAL_USES_LIBRARIES or
-# LOCAL_OPTIONAL_USES_LIBRARIES are specified.
-# Will change the default to true unconditionally in the future.
-ifndef LOCAL_ENFORCE_USES_LIBRARIES
-  ifneq (,$(strip $(LOCAL_USES_LIBRARIES)$(LOCAL_OPTIONAL_USES_LIBRARIES)))
-    LOCAL_ENFORCE_USES_LIBRARIES := true
-  endif
-endif
-
-my_enforced_uses_libraries :=
-ifdef LOCAL_ENFORCE_USES_LIBRARIES
-  my_enforced_uses_libraries := $(intermediates.COMMON)/enforce_uses_libraries.timestamp
-  $(my_enforced_uses_libraries): PRIVATE_USES_LIBRARIES := $(LOCAL_USES_LIBRARIES)
-  $(my_enforced_uses_libraries): PRIVATE_OPTIONAL_USES_LIBRARIES := $(LOCAL_OPTIONAL_USES_LIBRARIES)
-  $(my_enforced_uses_libraries): $(BUILD_SYSTEM)/verify_uses_libraries.sh $(AAPT)
-  $(my_enforced_uses_libraries): $(my_prebuilt_src_file)
-	@echo Verifying uses-libraries: $<
-	aapt_binary=$(AAPT) \
-	  uses_library_names="$(strip $(PRIVATE_USES_LIBRARIES))" \
-	  optional_uses_library_names="$(strip $(PRIVATE_OPTIONAL_USES_LIBRARIES))" \
-	  $(BUILD_SYSTEM)/verify_uses_libraries.sh $<
-	touch $@
-  $(built_module) : $(my_enforced_uses_libraries)
-endif
-
-dex_preopt_profile_src_file := $(my_prebuilt_src_file)
 
 rs_compatibility_jni_libs :=
 include $(BUILD_SYSTEM)/install_jni_libs.mk
@@ -156,6 +123,9 @@ else
     LOCAL_CERTIFICATE := $(dir $(DEFAULT_SYSTEM_DEV_CERTIFICATE))$(LOCAL_CERTIFICATE)
   endif
 
+  # NOTE(ruperts): Consider moving the logic below out of a conditional,
+  # to avoid the possibility of silently ignoring user settings.
+
   PACKAGES.$(LOCAL_MODULE).PRIVATE_KEY := $(LOCAL_CERTIFICATE).pk8
   PACKAGES.$(LOCAL_MODULE).CERTIFICATE := $(LOCAL_CERTIFICATE).x509.pem
   PACKAGES := $(PACKAGES) $(LOCAL_MODULE)
@@ -170,6 +140,8 @@ else
 
   $(built_module): $(LOCAL_CERTIFICATE_LINEAGE)
   $(built_module): PRIVATE_CERTIFICATE_LINEAGE := $(LOCAL_CERTIFICATE_LINEAGE)
+
+  $(built_module): PRIVATE_ROTATION_MIN_SDK_VERSION := $(LOCAL_ROTATION_MIN_SDK_VERSION)
 endif
 
 ifneq ($(LOCAL_MODULE_STEM),)
@@ -197,10 +169,13 @@ LOCAL_DEX_PREOPT := false
 endif
 
 my_dex_jar := $(my_prebuilt_src_file)
+dex_preopt_profile_src_file := $(my_prebuilt_src_file)
 
 #######################################
 # defines built_odex along with rule to install odex
+my_manifest_or_apk := $(my_prebuilt_src_file)
 include $(BUILD_SYSTEM)/dex_preopt_odex_install.mk
+my_manifest_or_apk :=
 #######################################
 ifneq ($(LOCAL_REPLACE_PREBUILT_APK_INSTALLED),)
 # There is a replacement for the prebuilt .apk we can install without any processing.
@@ -208,6 +183,30 @@ $(built_module) : $(LOCAL_REPLACE_PREBUILT_APK_INSTALLED)
 	$(transform-prebuilt-to-target)
 
 else  # ! LOCAL_REPLACE_PREBUILT_APK_INSTALLED
+
+# If the SDK version is 30 or higher, the apk is signed with a v2+ scheme.
+# Altering it will invalidate the signature. Just do error checks instead.
+do_not_alter_apk :=
+ifeq (PRESIGNED,$(LOCAL_CERTIFICATE))
+  ifneq (,$(LOCAL_SDK_VERSION))
+    ifeq ($(call math_is_number,$(LOCAL_SDK_VERSION)),true)
+      ifeq ($(call math_gt,$(LOCAL_SDK_VERSION),29),true)
+        do_not_alter_apk := true
+      endif
+    endif
+    # TODO: Add system_current after fixing the existing modules.
+    ifneq ($(filter current test_current core_current,$(LOCAL_SDK_VERSION)),)
+        do_not_alter_apk := true
+    endif
+  endif
+endif
+
+ifeq ($(do_not_alter_apk),true)
+$(built_module) : $(my_prebuilt_src_file) | $(ZIPALIGN)
+	$(transform-prebuilt-to-target)
+	$(check-jni-dex-compression)
+	$(check-package-alignment)
+else
 # Sign and align non-presigned .apks.
 # The embedded prebuilt jni to uncompress.
 ifeq ($(LOCAL_CERTIFICATE),PRESIGNED)
@@ -223,7 +222,7 @@ endif
 $(built_module): PRIVATE_EMBEDDED_JNI_LIBS := $(embedded_prebuilt_jni_libs)
 
 ifdef LOCAL_COMPRESSED_MODULE
-$(built_module) : $(MINIGZIP)
+$(built_module) : $(GZIP)
 endif
 
 ifeq ($(module_run_appcompat),true)
@@ -234,9 +233,10 @@ endif
 ifeq ($(module_run_appcompat),true)
 $(built_module) : $(AAPT2)
 endif
-$(built_module) : $(my_prebuilt_src_file) | $(ZIPALIGN) $(ZIP2ZIP) $(SIGNAPK_JAR)
+$(built_module) : $(my_prebuilt_src_file) | $(ZIPALIGN) $(ZIP2ZIP) $(SIGNAPK_JAR) $(SIGNAPK_JNI_LIBRARY_PATH)
 	$(transform-prebuilt-to-target)
 	$(uncompress-prebuilt-embedded-jni-libs)
+	$(remove-unwanted-prebuilt-embedded-jni-libs)
 ifeq (true, $(LOCAL_UNCOMPRESS_DEX))
 	$(uncompress-dexs)
 endif  # LOCAL_UNCOMPRESS_DEX
@@ -253,6 +253,7 @@ endif  # LOCAL_CERTIFICATE
 ifdef LOCAL_COMPRESSED_MODULE
 	$(compress-package)
 endif  # LOCAL_COMPRESSED_MODULE
+endif  # ! do_not_alter_apk
 endif  # ! LOCAL_REPLACE_PREBUILT_APK_INSTALLED
 
 
@@ -274,7 +275,7 @@ $(error You must put all the split source apks in the same folder: $(LOCAL_PACKA
 endif
 my_src_dir := $(LOCAL_PATH)/$(my_src_dir)
 
-$(built_apk_splits) : $(LOCAL_CERTIFICATE).pk8 $(LOCAL_CERTIFICATE).x509.pem
+$(built_apk_splits) : $(LOCAL_CERTIFICATE).pk8 $(LOCAL_CERTIFICATE).x509.pem | $(ZIPALIGN) $(ZIP2ZIP) $(SIGNAPK_JAR) $(SIGNAPK_JNI_LIBRARY_PATH)
 $(built_apk_splits) : PRIVATE_PRIVATE_KEY := $(LOCAL_CERTIFICATE).pk8
 $(built_apk_splits) : PRIVATE_CERTIFICATE := $(LOCAL_CERTIFICATE).x509.pem
 $(built_apk_splits) : $(intermediates)/%.apk : $(my_src_dir)/%.apk
@@ -296,3 +297,7 @@ $(my_all_targets): $(installed_apk_splits)
 
 endif # LOCAL_PACKAGE_SPLITS
 
+###########################################################
+## SBOM generation
+###########################################################
+include $(BUILD_SBOM_GEN)

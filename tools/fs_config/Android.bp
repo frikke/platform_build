@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    // See: http://go/android-license-faq
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 bootstrap_go_package {
     name: "soong-fs_config",
     pkgPath: "android/soong/fs_config",
@@ -30,9 +35,22 @@ cc_binary_host {
     srcs: ["fs_config.c"],
     shared_libs: [
         "libcutils",
-        "libselinux",
     ],
     cflags: ["-Werror"],
+}
+
+python_binary_host {
+    name: "fs_config_generator",
+    srcs: ["fs_config_generator.py"],
+}
+
+python_test_host {
+    name: "test_fs_config_generator",
+    main: "test_fs_config_generator.py",
+    srcs: [
+        "test_fs_config_generator.py",
+        "fs_config_generator.py",
+    ],
 }
 
 target_fs_config_gen_filegroup {
@@ -41,8 +59,8 @@ target_fs_config_gen_filegroup {
 
 genrule {
     name: "oemaids_header_gen",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) oemaid --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) oemaid --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -62,8 +80,8 @@ cc_library_headers {
 // TARGET_FS_CONFIG_GEN files.
 genrule {
     name: "passwd_gen_system",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) passwd --partition=system --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) passwd --partition=system --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -79,8 +97,8 @@ prebuilt_etc {
 
 genrule {
     name: "passwd_gen_vendor",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) passwd --partition=vendor --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) passwd --partition=vendor --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -97,8 +115,8 @@ prebuilt_etc {
 
 genrule {
     name: "passwd_gen_odm",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) passwd --partition=odm --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) passwd --partition=odm --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -115,8 +133,8 @@ prebuilt_etc {
 
 genrule {
     name: "passwd_gen_product",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) passwd --partition=product --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) passwd --partition=product --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -133,8 +151,8 @@ prebuilt_etc {
 
 genrule {
     name: "passwd_gen_system_ext",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) passwd --partition=system_ext --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) passwd --partition=system_ext --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -154,8 +172,8 @@ prebuilt_etc {
 // TARGET_FS_CONFIG_GEN files.
 genrule {
     name: "group_gen_system",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) group --partition=system --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) group --partition=system --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -171,8 +189,8 @@ prebuilt_etc {
 
 genrule {
     name: "group_gen_vendor",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) group --partition=vendor --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) group --partition=vendor --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -189,8 +207,8 @@ prebuilt_etc {
 
 genrule {
     name: "group_gen_odm",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) group --partition=odm --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) group --partition=odm --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -207,8 +225,8 @@ prebuilt_etc {
 
 genrule {
     name: "group_gen_product",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) group --partition=product --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) group --partition=product --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -225,8 +243,8 @@ prebuilt_etc {
 
 genrule {
     name: "group_gen_system_ext",
-    tool_files: ["fs_config_generator.py"],
-    cmd: "$(location fs_config_generator.py) group --partition=system_ext --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
+    tools: ["fs_config_generator"],
+    cmd: "$(location fs_config_generator) group --partition=system_ext --aid-header=$(location :android_filesystem_config_header) $(locations :target_fs_config_gen) >$(out)",
     srcs: [
         ":target_fs_config_gen",
         ":android_filesystem_config_header",
@@ -239,4 +257,389 @@ prebuilt_etc {
     filename: "group",
     system_ext_specific: true,
     src: ":group_gen_system_ext",
+}
+
+fs_config_cmd = "$(location fs_config_generator) fsconfig " +
+    "--aid-header $(location :android_filesystem_config_header) " +
+    "--capability-header $(location :linux_capability_header) " +
+    "--out_file $(out) "
+fs_config_cmd_dirs = fs_config_cmd + "--dirs "
+fs_config_cmd_files = fs_config_cmd + "--files "
+
+genrule_defaults {
+    name: "fs_config_defaults",
+    tools: ["fs_config_generator"],
+    srcs: [
+        ":android_filesystem_config_header",
+        ":linux_capability_header",
+        ":target_fs_config_gen",
+    ],
+    out: ["out"],
+}
+
+// system
+genrule {
+    name: "fs_config_dirs_system_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition system " +
+        "--all-partitions vendor,oem,odm,vendor_dlkm,odm_dlkm,system_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_system",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_system_gen",
+}
+
+genrule {
+    name: "fs_config_files_system_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition system " +
+        "--all-partitions vendor,oem,odm,vendor_dlkm,odm_dlkm,system_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_system",
+    filename: "fs_config_files",
+    src: ":fs_config_files_system_gen",
+}
+
+// system_ext
+genrule {
+    name: "fs_config_dirs_system_ext_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition system_ext " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_system_ext",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_system_ext_gen",
+    system_ext_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_system_ext_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition system_ext " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_system_ext",
+    filename: "fs_config_files",
+    src: ":fs_config_files_system_ext_gen",
+    system_ext_specific: true,
+}
+
+// product
+genrule {
+    name: "fs_config_dirs_product_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition product " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_product",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_product_gen",
+    product_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_product_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition product " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_product",
+    filename: "fs_config_files",
+    src: ":fs_config_files_product_gen",
+    product_specific: true,
+}
+
+// vendor
+genrule {
+    name: "fs_config_dirs_vendor_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition vendor " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_vendor",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_vendor_gen",
+    vendor: true,
+}
+
+genrule {
+    name: "fs_config_files_vendor_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition vendor " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_vendor",
+    filename: "fs_config_files",
+    src: ":fs_config_files_vendor_gen",
+    vendor: true,
+}
+
+// odm
+genrule {
+    name: "fs_config_dirs_odm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition odm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_odm",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_odm_gen",
+    device_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_odm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition odm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_odm",
+    filename: "fs_config_files",
+    src: ":fs_config_files_odm_gen",
+    device_specific: true,
+}
+
+// system_dlkm
+genrule {
+    name: "fs_config_dirs_system_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition system_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_system_dlkm",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_system_dlkm_gen",
+    system_dlkm_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_system_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition system_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_system_dlkm",
+    filename: "fs_config_files",
+    src: ":fs_config_files_system_dlkm_gen",
+    system_dlkm_specific: true,
+}
+
+// vendor_dlkm
+genrule {
+    name: "fs_config_dirs_vendor_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition vendor_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_vendor_dlkm",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_vendor_dlkm_gen",
+    vendor_dlkm_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_vendor_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition vendor_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_vendor_dlkm",
+    filename: "fs_config_files",
+    src: ":fs_config_files_vendor_dlkm_gen",
+    vendor_dlkm_specific: true,
+}
+
+// odm_dlkm
+genrule {
+    name: "fs_config_dirs_odm_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition odm_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_odm_dlkm",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_odm_dlkm_gen",
+    odm_dlkm_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_odm_dlkm_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition odm_dlkm " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_odm_dlkm",
+    filename: "fs_config_files",
+    src: ":fs_config_files_odm_dlkm_gen",
+    odm_dlkm_specific: true,
+}
+
+// oem
+genrule {
+    name: "fs_config_dirs_oem_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_dirs +
+        "--partition oem " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_dirs_oem",
+    filename: "fs_config_dirs",
+    src: ":fs_config_dirs_oem_gen",
+    oem_specific: true,
+}
+
+genrule {
+    name: "fs_config_files_oem_gen",
+    defaults: ["fs_config_defaults"],
+    cmd: fs_config_cmd_files +
+        "--partition oem " +
+        "$(locations :target_fs_config_gen)",
+}
+
+prebuilt_etc {
+    name: "fs_config_files_oem",
+    filename: "fs_config_files",
+    src: ":fs_config_files_oem_gen",
+    oem_specific: true,
+}
+
+// Generate the <p>/etc/fs_config_dirs binary files for each partition.
+// Add fs_config_dirs to PRODUCT_PACKAGES in the device make file to enable.
+phony {
+    name: "fs_config_dirs",
+    required: [
+        "fs_config_dirs_system",
+        "fs_config_dirs_system_ext",
+        "fs_config_dirs_product",
+        "fs_config_dirs_nonsystem",
+    ],
+}
+
+// Generate the <p>/etc/fs_config_files binary files for each partition.
+// Add fs_config_files to PRODUCT_PACKAGES in the device make file to enable.
+phony {
+    name: "fs_config_files",
+    required: [
+        "fs_config_files_system",
+        "fs_config_files_system_ext",
+        "fs_config_files_product",
+        "fs_config_files_nonsystem",
+    ],
+}
+
+// Generate the <p>/etc/fs_config_dirs binary files for all enabled partitions
+// excluding /system, /system_ext and /product. Add fs_config_dirs_nonsystem to
+// PRODUCT_PACKAGES in the device make file to enable.
+phony {
+    name: "fs_config_dirs_nonsystem",
+    required: [] +
+        select(soong_config_variable("fs_config", "vendor"), {
+            true: ["fs_config_dirs_vendor"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "oem"), {
+            true: ["fs_config_dirs_oem"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "odm"), {
+            true: ["fs_config_dirs_odm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "vendor_dlkm"), {
+            true: ["fs_config_dirs_vendor_dlkm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "odm_dlkm"), {
+            true: ["fs_config_dirs_odm_dlkm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "system_dlkm"), {
+            true: ["fs_config_dirs_system_dlkm"],
+            default: [],
+        }),
+}
+
+// Generate the <p>/etc/fs_config_files binary files for all enabled partitions
+// excluding /system, /system_ext and /product. Add fs_config_files_nonsystem to
+// PRODUCT_PACKAGES in the device make file to enable.
+phony {
+    name: "fs_config_files_nonsystem",
+    required: [] +
+        select(soong_config_variable("fs_config", "vendor"), {
+            true: ["fs_config_files_vendor"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "oem"), {
+            true: ["fs_config_files_oem"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "odm"), {
+            true: ["fs_config_files_odm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "vendor_dlkm"), {
+            true: ["fs_config_files_vendor_dlkm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "odm_dlkm"), {
+            true: ["fs_config_files_odm_dlkm"],
+            default: [],
+        }) +
+        select(soong_config_variable("fs_config", "system_dlkm"), {
+            true: ["fs_config_files_system_dlkm"],
+            default: [],
+        }),
 }

@@ -4,7 +4,7 @@ $(warning Either use 'envsetup.sh; m' or 'build/soong/soong_ui.bash --make-mode'
 $(error done)
 endif
 
-$(info [1/1] initializing build system ...)
+$(info [1/1] initializing legacy Make module parser ...)
 
 # Absolute path of the present working direcotry.
 # This overrides the shell variable $PWD, which does not necessarily points to
@@ -31,8 +31,7 @@ endif
 .KATI_READONLY := $(foreach n,$(SOONG_CONFIG_NAMESPACES),SOONG_CONFIG_$(n))
 .KATI_READONLY := $(foreach n,$(SOONG_CONFIG_NAMESPACES),$(foreach k,$(SOONG_CONFIG_$(n)),SOONG_CONFIG_$(n)_$(k)))
 
-include $(SOONG_MAKEVARS_MK)
-
+include $(SOONG_OUT_DIR)/make_vars-$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).mk
 YACC :=$= $(BISON) -d
 
 include $(BUILD_SYSTEM)/clang/config.mk
@@ -40,26 +39,18 @@ include $(BUILD_SYSTEM)/clang/config.mk
 # Write the build number to a file so it can be read back in
 # without changing the command line every time.  Avoids rebuilds
 # when using ninja.
-$(shell mkdir -p $(SOONG_OUT_DIR) && \
-    echo -n $(BUILD_NUMBER) > $(SOONG_OUT_DIR)/build_number.txt)
 BUILD_NUMBER_FILE := $(SOONG_OUT_DIR)/build_number.txt
-.KATI_READONLY := BUILD_NUMBER_FILE
 $(KATI_obsolete_var BUILD_NUMBER,See https://android.googlesource.com/platform/build/+/master/Changes.md#BUILD_NUMBER)
-$(BUILD_NUMBER_FILE):
-	touch $@
+BUILD_HOSTNAME_FILE := $(SOONG_OUT_DIR)/build_hostname.txt
+$(KATI_obsolete_var BUILD_HOSTNAME,Use BUILD_HOSTNAME_FROM_FILE instead)
+$(KATI_obsolete_var FILE_NAME_TAG,https://android.googlesource.com/platform/build/+/master/Changes.md#FILE_NAME_TAG)
+
+.KATI_RESTAT: $(BUILD_NUMBER_FILE)
+.KATI_RESTAT: $(BUILD_HOSTNAME_FILE)
 
 DATE_FROM_FILE := date -d @$(BUILD_DATETIME_FROM_FILE)
 .KATI_READONLY := DATE_FROM_FILE
 
-# Pick a reasonable string to use to identify files.
-ifeq ($(strip $(HAS_BUILD_NUMBER)),false)
-  # BUILD_NUMBER has a timestamp in it, which means that
-  # it will change every time.  Pick a stable value.
-  FILE_NAME_TAG := eng.$(BUILD_USERNAME)
-else
-  FILE_NAME_TAG := $(file <$(BUILD_NUMBER_FILE))
-endif
-.KATI_READONLY := FILE_NAME_TAG
 
 # Make an empty directory, which can be used to make empty jars
 EMPTY_DIRECTORY := $(OUT_DIR)/empty
@@ -67,8 +58,6 @@ $(shell mkdir -p $(EMPTY_DIRECTORY) && rm -rf $(EMPTY_DIRECTORY)/*)
 
 # CTS-specific config.
 -include cts/build/config.mk
-# VTS-specific config.
--include test/vts/tools/vts-tradefed/build/config.mk
 # device-tests-specific-config.
 -include tools/tradefederation/build/suites/device-tests/config.mk
 # general-tests-specific-config.
@@ -83,6 +72,15 @@ $(shell mkdir -p $(EMPTY_DIRECTORY) && rm -rf $(EMPTY_DIRECTORY)/*)
 -include test/vts/tools/vts-core-tradefed/build/config.mk
 # CSUITE-specific config.
 -include test/app_compat/csuite/tools/build/config.mk
+# CATBox-specific config.
+-include test/catbox/tools/build/config.mk
+# CTS-Root-specific config.
+-include test/cts-root/tools/build/config.mk
+# WVTS-specific config.
+-include test/wvts/tools/build/config.mk
+# DTS-specific config.
+-include test/dts/tools/build/config.mk
+
 
 # Clean rules
 .PHONY: clean-dex-files
@@ -106,55 +104,12 @@ ifeq (true,$(EMMA_INSTRUMENT_STATIC))
 EMMA_INSTRUMENT := true
 endif
 
-ifeq (true,$(EMMA_INSTRUMENT))
-# Adding the jacoco library can cause the inclusion of
-# some typically banned classes
-# So if the user didn't specify SKIP_BOOT_JARS_CHECK, enable it here
-ifndef SKIP_BOOT_JARS_CHECK
-SKIP_BOOT_JARS_CHECK := true
-endif
-endif
-
 ifdef TARGET_ARCH_SUITE
   # TODO(b/175577370): Enable this error.
   # $(error TARGET_ARCH_SUITE is not supported in kati/make builds)
 endif
 
-# ADDITIONAL_<partition>_PROPERTIES are properties that are determined by the
-# build system itself. Don't let it be defined from outside of the core build
-# system like Android.mk or <product>.mk files.
-_additional_prop_var_names := \
-    ADDITIONAL_SYSTEM_PROPERTIES \
-    ADDITIONAL_VENDOR_PROPERTIES \
-    ADDITIONAL_ODM_PROPERTIES \
-    ADDITIONAL_PRODUCT_PROPERTIES
-
-$(foreach name, $(_additional_prop_var_names),\
-  $(if $($(name)),\
-    $(error $(name) must not set before here. $($(name)))\
-  ,)\
-  $(eval $(name) :=)\
-)
-_additional_prop_var_names :=
-
 $(KATI_obsolete_var ADDITIONAL_BUILD_PROPERTIES, Please use ADDITIONAL_SYSTEM_PROPERTIES)
-
-#
-# -----------------------------------------------------------------
-# Add the product-defined properties to the build properties.
-ifdef PRODUCT_SHIPPING_API_LEVEL
-ADDITIONAL_SYSTEM_PROPERTIES += \
-  ro.product.first_api_level=$(PRODUCT_SHIPPING_API_LEVEL)
-endif
-
-ifneq ($(BOARD_PROPERTY_OVERRIDES_SPLIT_ENABLED), true)
-  ADDITIONAL_SYSTEM_PROPERTIES += $(PRODUCT_PROPERTY_OVERRIDES)
-else
-  ifndef BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE
-    ADDITIONAL_SYSTEM_PROPERTIES += $(PRODUCT_PROPERTY_OVERRIDES)
-  endif
-endif
-
 
 # Bring in standard build system definitions.
 include $(BUILD_SYSTEM)/definitions.mk
@@ -187,143 +142,8 @@ endif
 # PDK builds are no longer supported, this is always platform
 TARGET_BUILD_JAVA_SUPPORT_LEVEL :=$= platform
 
-# -----------------------------------------------------------------
-
-ADDITIONAL_SYSTEM_PROPERTIES += ro.treble.enabled=${PRODUCT_FULL_TREBLE}
-
 $(KATI_obsolete_var PRODUCT_FULL_TREBLE,\
-	Code should be written to work regardless of a device being Treble or \
-	variables like PRODUCT_SEPOLICY_SPLIT should be used until that is \
-	possible.)
-
-# Sets ro.actionable_compatible_property.enabled to know on runtime whether the
-# allowed list of actionable compatible properties is enabled or not.
-ADDITIONAL_SYSTEM_PROPERTIES += ro.actionable_compatible_property.enabled=true
-
-# Add the system server compiler filter if they are specified for the product.
-ifneq (,$(PRODUCT_SYSTEM_SERVER_COMPILER_FILTER))
-ADDITIONAL_PRODUCT_PROPERTIES += dalvik.vm.systemservercompilerfilter=$(PRODUCT_SYSTEM_SERVER_COMPILER_FILTER)
-endif
-
-# Enable core platform API violation warnings on userdebug and eng builds.
-ifneq ($(TARGET_BUILD_VARIANT),user)
-ADDITIONAL_SYSTEM_PROPERTIES += persist.debug.dalvik.vm.core_platform_api_policy=just-warn
-endif
-
-# Define ro.sanitize.<name> properties for all global sanitizers.
-ADDITIONAL_SYSTEM_PROPERTIES += $(foreach s,$(SANITIZE_TARGET),ro.sanitize.$(s)=true)
-
-# Sets the default value of ro.postinstall.fstab.prefix to /system.
-# Device board config should override the value to /product when needed by:
-#
-#     PRODUCT_PRODUCT_PROPERTIES += ro.postinstall.fstab.prefix=/product
-#
-# It then uses ${ro.postinstall.fstab.prefix}/etc/fstab.postinstall to
-# mount system_other partition.
-ADDITIONAL_SYSTEM_PROPERTIES += ro.postinstall.fstab.prefix=/system
-
-# -----------------------------------------------------------------
-# ADDITIONAL_VENDOR_PROPERTIES will be installed in vendor/build.prop if
-# property_overrides_split_enabled is true. Otherwise it will be installed in
-# /system/build.prop
-ifdef BOARD_VNDK_VERSION
-  ifeq ($(BOARD_VNDK_VERSION),current)
-    ADDITIONAL_VENDOR_PROPERTIES := ro.vndk.version=$(PLATFORM_VNDK_VERSION)
-  else
-    ADDITIONAL_VENDOR_PROPERTIES := ro.vndk.version=$(BOARD_VNDK_VERSION)
-  endif
-endif
-
-# Add cpu properties for bionic and ART.
-ADDITIONAL_VENDOR_PROPERTIES += ro.bionic.arch=$(TARGET_ARCH)
-ADDITIONAL_VENDOR_PROPERTIES += ro.bionic.cpu_variant=$(TARGET_CPU_VARIANT_RUNTIME)
-ADDITIONAL_VENDOR_PROPERTIES += ro.bionic.2nd_arch=$(TARGET_2ND_ARCH)
-ADDITIONAL_VENDOR_PROPERTIES += ro.bionic.2nd_cpu_variant=$(TARGET_2ND_CPU_VARIANT_RUNTIME)
-
-ADDITIONAL_VENDOR_PROPERTIES += persist.sys.dalvik.vm.lib.2=libart.so
-ADDITIONAL_VENDOR_PROPERTIES += dalvik.vm.isa.$(TARGET_ARCH).variant=$(DEX2OAT_TARGET_CPU_VARIANT_RUNTIME)
-ifneq ($(DEX2OAT_TARGET_INSTRUCTION_SET_FEATURES),)
-  ADDITIONAL_VENDOR_PROPERTIES += dalvik.vm.isa.$(TARGET_ARCH).features=$(DEX2OAT_TARGET_INSTRUCTION_SET_FEATURES)
-endif
-
-ifdef TARGET_2ND_ARCH
-  ADDITIONAL_VENDOR_PROPERTIES += dalvik.vm.isa.$(TARGET_2ND_ARCH).variant=$($(TARGET_2ND_ARCH_VAR_PREFIX)DEX2OAT_TARGET_CPU_VARIANT_RUNTIME)
-  ifneq ($($(TARGET_2ND_ARCH_VAR_PREFIX)DEX2OAT_TARGET_INSTRUCTION_SET_FEATURES),)
-    ADDITIONAL_VENDOR_PROPERTIES += dalvik.vm.isa.$(TARGET_2ND_ARCH).features=$($(TARGET_2ND_ARCH_VAR_PREFIX)DEX2OAT_TARGET_INSTRUCTION_SET_FEATURES)
-  endif
-endif
-
-# Although these variables are prefixed with TARGET_RECOVERY_, they are also needed under charger
-# mode (via libminui).
-ifdef TARGET_RECOVERY_DEFAULT_ROTATION
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.minui.default_rotation=$(TARGET_RECOVERY_DEFAULT_ROTATION)
-endif
-ifdef TARGET_RECOVERY_OVERSCAN_PERCENT
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.minui.overscan_percent=$(TARGET_RECOVERY_OVERSCAN_PERCENT)
-endif
-ifdef TARGET_RECOVERY_PIXEL_FORMAT
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.minui.pixel_format=$(TARGET_RECOVERY_PIXEL_FORMAT)
-endif
-
-ifdef PRODUCT_USE_DYNAMIC_PARTITIONS
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.boot.dynamic_partitions=$(PRODUCT_USE_DYNAMIC_PARTITIONS)
-endif
-
-ifdef PRODUCT_RETROFIT_DYNAMIC_PARTITIONS
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.boot.dynamic_partitions_retrofit=$(PRODUCT_RETROFIT_DYNAMIC_PARTITIONS)
-endif
-
-ifdef PRODUCT_SHIPPING_API_LEVEL
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.product.first_api_level=$(PRODUCT_SHIPPING_API_LEVEL)
-endif
-
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.vendor.build.security_patch=$(VENDOR_SECURITY_PATCH) \
-    ro.vendor.product.cpu.abilist=$(TARGET_CPU_ABI_LIST) \
-    ro.vendor.product.cpu.abilist32=$(TARGET_CPU_ABI_LIST_32_BIT) \
-    ro.vendor.product.cpu.abilist64=$(TARGET_CPU_ABI_LIST_64_BIT) \
-    ro.product.board=$(TARGET_BOOTLOADER_BOARD_NAME) \
-    ro.board.platform=$(TARGET_BOARD_PLATFORM) \
-    ro.hwui.use_vulkan=$(TARGET_USES_VULKAN)
-
-ifdef TARGET_SCREEN_DENSITY
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.sf.lcd_density=$(TARGET_SCREEN_DENSITY)
-endif
-
-ifdef AB_OTA_UPDATER
-ADDITIONAL_VENDOR_PROPERTIES += \
-    ro.build.ab_update=$(AB_OTA_UPDATER)
-endif
-
-ADDITIONAL_ODM_PROPERTIES += \
-    ro.odm.product.cpu.abilist=$(TARGET_CPU_ABI_LIST) \
-    ro.odm.product.cpu.abilist32=$(TARGET_CPU_ABI_LIST_32_BIT) \
-    ro.odm.product.cpu.abilist64=$(TARGET_CPU_ABI_LIST_64_BIT)
-
-# Set ro.product.vndk.version to know the VNDK version required by product
-# modules. It uses the version in PRODUCT_PRODUCT_VNDK_VERSION. If the value
-# is "current", use PLATFORM_VNDK_VERSION.
-ifdef PRODUCT_PRODUCT_VNDK_VERSION
-ifeq ($(PRODUCT_PRODUCT_VNDK_VERSION),current)
-ADDITIONAL_PRODUCT_PROPERTIES += ro.product.vndk.version=$(PLATFORM_VNDK_VERSION)
-else
-ADDITIONAL_PRODUCT_PROPERTIES += ro.product.vndk.version=$(PRODUCT_PRODUCT_VNDK_VERSION)
-endif
-endif
-
-ADDITIONAL_PRODUCT_PROPERTIES += ro.build.characteristics=$(TARGET_AAPT_CHARACTERISTICS)
-
-ifeq ($(AB_OTA_UPDATER),true)
-ADDITIONAL_PRODUCT_PROPERTIES += ro.product.ab_ota_partitions=$(subst $(space),$(comma),$(AB_OTA_PARTITIONS))
-endif
-
+	Code should be written to work regardless of a device being Treble)
 # -----------------------------------------------------------------
 ###
 ### In this section we set up the things that are different
@@ -332,68 +152,19 @@ endif
 
 is_sdk_build :=
 
-ifneq ($(filter sdk win_sdk sdk_addon,$(MAKECMDGOALS)),)
+ifneq ($(filter sdk sdk_addon,$(MAKECMDGOALS)),)
 is_sdk_build := true
 endif
 
-## user/userdebug ##
-
-user_variant := $(filter user userdebug,$(TARGET_BUILD_VARIANT))
-enable_target_debugging := true
 tags_to_install :=
-ifneq (,$(user_variant))
-  # Target is secure in user builds.
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.secure=1
-  ADDITIONAL_SYSTEM_PROPERTIES += security.perf_harden=1
 
-  ifeq ($(user_variant),user)
-    ADDITIONAL_SYSTEM_PROPERTIES += ro.adb.secure=1
-  endif
-
-  ifeq ($(user_variant),userdebug)
-    # Pick up some extra useful tools
-    tags_to_install += debug
-  else
-    # Disable debugging in plain user builds.
-    enable_target_debugging :=
-  endif
-
-  # Disallow mock locations by default for user builds
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.allow.mock.location=0
-
-else # !user_variant
-  # Turn on checkjni for non-user builds.
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.kernel.android.checkjni=1
-  # Set device insecure for non-user builds.
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.secure=0
-  # Allow mock locations by default for non user builds
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.allow.mock.location=1
-endif # !user_variant
-
-ifeq (true,$(strip $(enable_target_debugging)))
-  # Target is more debuggable and adbd is on by default
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.debuggable=1
-  # Enable Dalvik lock contention logging.
-  ADDITIONAL_SYSTEM_PROPERTIES += dalvik.vm.lockprof.threshold=500
-else # !enable_target_debugging
-  # Target is less debuggable and adbd is off by default
-  ADDITIONAL_SYSTEM_PROPERTIES += ro.debuggable=0
-endif # !enable_target_debugging
-
-## eng ##
+ifeq ($(TARGET_BUILD_VARIANT),userdebug)
+# Pick up some extra useful tools
+tags_to_install := debug
+endif
 
 ifeq ($(TARGET_BUILD_VARIANT),eng)
 tags_to_install := debug eng
-ifneq ($(filter ro.setupwizard.mode=ENABLED, $(call collapse-pairs, $(ADDITIONAL_SYSTEM_PROPERTIES))),)
-  # Don't require the setup wizard on eng builds
-  ADDITIONAL_SYSTEM_PROPERTIES := $(filter-out ro.setupwizard.mode=%,\
-          $(call collapse-pairs, $(ADDITIONAL_SYSTEM_PROPERTIES))) \
-          ro.setupwizard.mode=OPTIONAL
-endif
-ifndef is_sdk_build
-  # To speedup startup of non-preopted builds, don't verify or compile the boot image.
-  ADDITIONAL_SYSTEM_PROPERTIES += dalvik.vm.image-dex2oat-filter=extract
-endif
 endif
 
 ## asan ##
@@ -429,14 +200,10 @@ endif
 # TODO: this should be eng I think.  Since the sdk is built from the eng
 # variant.
 tags_to_install := debug eng
-ADDITIONAL_SYSTEM_PROPERTIES += xmpp.auto-presence=true
-ADDITIONAL_SYSTEM_PROPERTIES += ro.config.nocheckin=yes
 else # !sdk
 endif
 
 BUILD_WITHOUT_PV := true
-
-ADDITIONAL_SYSTEM_PROPERTIES += net.bt.name=Android
 
 # ------------------------------------------------------------
 # Define a function that, given a list of module tags, returns
@@ -468,6 +235,8 @@ endif
 # Typical build; include any Android.mk files we can find.
 #
 
+include $(BUILD_SYSTEM)/art_config.mk
+
 # Bring in dex_preopt.mk
 # This creates some modules so it needs to be included after
 # should-install-to-system is defined (in order for base_rules.mk to function
@@ -476,10 +245,6 @@ include $(BUILD_SYSTEM)/dex_preopt.mk
 
 # Strip and readonly a few more variables so they won't be modified.
 $(readonly-final-product-vars)
-ADDITIONAL_SYSTEM_PROPERTIES := $(strip $(ADDITIONAL_SYSTEM_PROPERTIES))
-.KATI_READONLY := ADDITIONAL_SYSTEM_PROPERTIES
-ADDITIONAL_PRODUCT_PROPERTIES := $(strip $(ADDITIONAL_PRODUCT_PROPERTIES))
-.KATI_READONLY := ADDITIONAL_PRODUCT_PROPERTIES
 
 ifneq ($(PRODUCT_ENFORCE_RRO_TARGETS),)
 ENFORCE_RRO_SOURCES :=
@@ -507,13 +272,48 @@ FULL_BUILD := true
 # Include all of the makefiles in the system
 #
 
-subdir_makefiles := $(SOONG_ANDROID_MK) $(file <$(OUT_DIR)/.module_paths/Android.mk.list) $(SOONG_OUT_DIR)/late-$(TARGET_PRODUCT).mk
+subdir_makefiles := \
+    $(SOONG_OUT_DIR)/installs-$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).mk \
+    $(SOONG_ANDROID_MK) \
+    build/make/target/board/android-info.mk
+
+# Android.mk files are only used on Linux builds, Mac only supports Android.bp
+ifeq ($(HOST_OS),linux)
+  ifeq ($(PRODUCT_IGNORE_ALL_ANDROIDMK),true)
+    allowed_androidmk_files :=
+    ifdef PRODUCT_ANDROIDMK_ALLOWLIST_FILE
+      -include $(PRODUCT_ANDROIDMK_ALLOWLIST_FILE)
+    endif
+    allowed_androidmk_files += $(PRODUCT_ALLOWED_ANDROIDMK_FILES)
+    subdir_makefiles += $(filter $(allowed_androidmk_files),$(file <$(OUT_DIR)/.module_paths/Android.mk.list))
+    allowed_androidmk_files :=
+  else
+    subdir_makefiles += $(file <$(OUT_DIR)/.module_paths/Android.mk.list)
+  endif
+endif
+
+subdir_makefiles += $(SOONG_OUT_DIR)/late-$(TARGET_PRODUCT)$(COVERAGE_SUFFIX).mk
+
 subdir_makefiles_total := $(words int $(subdir_makefiles) post finish)
 .KATI_READONLY := subdir_makefiles_total
 
 $(foreach mk,$(subdir_makefiles),$(info [$(call inc_and_print,subdir_makefiles_inc)/$(subdir_makefiles_total)] including $(mk) ...)$(eval include $(mk)))
 
+-include device/generic/goldfish/tasks/emu_img_zip.mk
+
+# Build bootloader.img/radio.img, and unpack the partitions.
+-include vendor/google_devices/$(TARGET_SOC)/prebuilts/misc_bins/update_bootloader_radio_image.mk
+
+# For an unbundled image, we can skip blueprint_tools because unbundled image
+# aims to remove a large number framework projects from the manifest, the
+# sources or dependencies for these tools may be missing from the tree.
+ifeq (,$(TARGET_BUILD_UNBUNDLED_IMAGE))
 droid_targets : blueprint_tools
+checkbuild: blueprint_tests
+endif
+
+# Create necessary directories and symlinks in the root filesystem
+include system/core/rootdir/create_root_structure.mk
 
 endif # dont_bother
 
@@ -521,7 +321,7 @@ ifndef subdir_makefiles_total
 subdir_makefiles_total := $(words init post finish)
 endif
 
-$(info [$(call inc_and_print,subdir_makefiles_inc)/$(subdir_makefiles_total)] finishing build rules ...)
+$(info [$(call inc_and_print,subdir_makefiles_inc)/$(subdir_makefiles_total)] finishing legacy Make module parsing ...)
 
 # -------------------------------------------------------------------
 # All module makefiles have been included at this point.
@@ -724,6 +524,9 @@ ifneq (,$(_nonexistent_required))
     $(info $(word 1,$(r)) module $(word 2,$(r)) requires non-existent $(word 3,$(r)) module: $(word 4,$(r))) \
   )
   $(warning Set BUILD_BROKEN_MISSING_REQUIRED_MODULES := true to bypass this check if this is intentional)
+  ifneq (,$(PRODUCT_SOURCE_ROOT_DIRS))
+    $(warning PRODUCT_SOURCE_ROOT_DIRS is non-empty. Some necessary modules may have been skipped by Soong)
+  endif
   $(error Build failed)
 endif # _nonexistent_required != empty
 endif # check_missing_required_modules == true
@@ -774,12 +577,14 @@ $(call add-all-host-cross-to-host-cross-required-modules-deps)
 
 # Sets up dependencies such that whenever a target module is installed,
 # any other target modules listed in $(ALL_MODULES.$(m).REQUIRED_FROM_TARGET) will also be installed
+# This doesn't apply to ORDERONLY_INSTALLED items.
 define add-all-target-to-target-required-modules-deps
 $(foreach m,$(ALL_MODULES), \
   $(eval r := $(ALL_MODULES.$(m).REQUIRED_FROM_TARGET)) \
   $(if $(r), \
     $(eval r := $(call module-installed-files,$(r))) \
     $(eval t_m := $(filter $(TARGET_OUT_ROOT)/%, $(ALL_MODULES.$(m).INSTALLED))) \
+    $(eval t_m := $(filter-out $(ALL_MODULES.$(m).ORDERONLY_INSTALLED), $(ALL_MODULES.$(m).INSTALLED))) \
     $(eval t_r := $(filter $(TARGET_OUT_ROOT)/%, $(r))) \
     $(eval t_r := $(filter-out $(t_m), $(t_r))) \
     $(if $(t_m), $(eval $(call add-required-deps, $(t_m),$(t_r)))) \
@@ -894,19 +699,28 @@ endef
 # Scan all modules in general-tests, device-tests and other selected suites and
 # flatten the shared library dependencies.
 define update-host-shared-libs-deps-for-suites
-$(foreach suite,general-tests device-tests vts art-host-tests host-unit-tests,\
+$(foreach suite,general-tests device-tests vts tvts art-host-tests host-unit-tests camera-hal-tests,\
   $(foreach m,$(COMPATIBILITY.$(suite).MODULES),\
     $(eval my_deps := $(call get-all-shared-libs-deps,$(m)))\
     $(foreach dep,$(my_deps),\
       $(foreach f,$(ALL_MODULES.$(dep).HOST_SHARED_LIBRARY_FILES),\
-        $(if $(filter $(suite),device-tests general-tests),\
+        $(if $(filter $(suite),device-tests general-tests art-host-tests host-unit-tests camera-hal-tests),\
           $(eval my_testcases := $(HOST_OUT_TESTCASES)),\
           $(eval my_testcases := $$(COMPATIBILITY_TESTCASES_OUT_$(suite))))\
         $(eval target := $(my_testcases)/$(lastword $(subst /, ,$(dir $(f))))/$(notdir $(f)))\
+        $(eval prefix := ../../..)
+        $(if $(strip $(patsubst %x86,,$(COMPATIBILITY.$(suite).ARCH_DIRS.$(m)))), \
+          $(if $(strip $(patsubst %x86_64,,$(COMPATIBILITY.$(suite).ARCH_DIRS.$(m)))),$(eval prefix := ../..),),) \
+        $(eval link_target := $(prefix)/$(lastword $(subst /, ,$(dir $(f))))/$(notdir $(f)))\
+        $(eval symlink := $(COMPATIBILITY.$(suite).ARCH_DIRS.$(m))/shared_libs/$(notdir $(f)))\
+        $(eval COMPATIBILITY.$(suite).SYMLINKS := \
+          $$(COMPATIBILITY.$(suite).SYMLINKS) $(f):$(link_target):$(symlink))\
+        $(if $(strip $(ALL_TARGETS.$(target).META_LIC)),,$(call declare-copy-target-license-metadata,$(target),$(f)))\
         $(eval COMPATIBILITY.$(suite).HOST_SHARED_LIBRARY.FILES := \
           $$(COMPATIBILITY.$(suite).HOST_SHARED_LIBRARY.FILES) $(f):$(target))\
         $(eval COMPATIBILITY.$(suite).HOST_SHARED_LIBRARY.FILES := \
-          $(sort $(COMPATIBILITY.$(suite).HOST_SHARED_LIBRARY.FILES)))))))
+          $(sort $(COMPATIBILITY.$(suite).HOST_SHARED_LIBRARY.FILES))))))\
+  $(eval COMPATIBILITY.$(suite).SYMLINKS := $(sort $(COMPATIBILITY.$(suite).SYMLINKS))))
 endef
 
 $(call resolve-shared-libs-depes,TARGET_)
@@ -1120,7 +934,11 @@ $(foreach export,$(EXPORTS_LIST),$(eval $(call add-dependency,$$(EXPORTS.$$(expo
 # Expand a list of modules to the modules that they override (if any)
 # $(1): The list of modules.
 define module-overrides
-$(foreach m,$(1),$(PACKAGES.$(m).OVERRIDES) $(EXECUTABLES.$(m).OVERRIDES) $(SHARED_LIBRARIES.$(m).OVERRIDES) $(ETC.$(m).OVERRIDES))
+$(foreach m,$(1),\
+  $(eval _mo_overrides := $(PACKAGES.$(m).OVERRIDES) $(EXECUTABLES.$(m).OVERRIDES) $(SHARED_LIBRARIES.$(m).OVERRIDES) $(ETC.$(m).OVERRIDES))\
+  $(if $(filter $(m),$(_mo_overrides)),\
+    $(error Module $(m) cannot override itself),\
+    $(_mo_overrides)))
 endef
 
 ###########################################################
@@ -1168,13 +986,15 @@ define resolve-product-relative-paths
         $(subst $(_odm_path_placeholder),$(TARGET_COPY_OUT_ODM),\
           $(subst $(_vendor_dlkm_path_placeholder),$(TARGET_COPY_OUT_VENDOR_DLKM),\
             $(subst $(_odm_dlkm_path_placeholder),$(TARGET_COPY_OUT_ODM_DLKM),\
-              $(foreach p,$(1),$(call append-path,$(PRODUCT_OUT),$(p)$(2)))))))))
+              $(subst $(_system_dlkm_path_placeholder),$(TARGET_COPY_OUT_SYSTEM_DLKM),\
+                $(foreach p,$(1),$(call append-path,$(PRODUCT_OUT),$(p)$(2))))))))))
 endef
 
 # Returns modules included automatically as a result of certain BoardConfig
 # variables being set.
 define auto-included-modules
-  $(if $(BOARD_VNDK_VERSION),vndk_package) \
+  $(foreach vndk_ver,$(PRODUCT_EXTRA_VNDK_VERSIONS),com.android.vndk.v$(vndk_ver)) \
+  llndk.libraries.txt \
   $(if $(DEVICE_MANIFEST_FILE),vendor_manifest.xml) \
   $(if $(DEVICE_MANIFEST_SKUS),$(foreach sku, $(DEVICE_MANIFEST_SKUS),vendor_manifest_$(sku).xml)) \
   $(if $(ODM_MANIFEST_FILES),odm_manifest.xml) \
@@ -1182,9 +1002,7 @@ define auto-included-modules
 
 endef
 
-# Lists most of the files a particular product installs, including:
-# - PRODUCT_PACKAGES, and their LOCAL_REQUIRED_MODULES
-# - PRODUCT_COPY_FILES
+# Lists the modules particular product installs.
 # The base list of modules to build for this product is specified
 # by the appropriate product definition file, which was included
 # by product_config.mk.
@@ -1196,7 +1014,7 @@ endef
 # Name resolution for LOCAL_REQUIRED_MODULES:
 #   See the select-bitness-of-required-modules definition.
 # $(1): product makefile
-define product-installed-files
+define product-installed-modules
   $(eval _pif_modules := \
     $(call get-product-var,$(1),PRODUCT_PACKAGES) \
     $(if $(filter eng,$(tags_to_install)),$(call get-product-var,$(1),PRODUCT_PACKAGES_ENG)) \
@@ -1204,6 +1022,12 @@ define product-installed-files
     $(if $(filter tests,$(tags_to_install)),$(call get-product-var,$(1),PRODUCT_PACKAGES_TESTS)) \
     $(if $(filter asan,$(tags_to_install)),$(call get-product-var,$(1),PRODUCT_PACKAGES_DEBUG_ASAN)) \
     $(if $(filter java_coverage,$(tags_to_install)),$(call get-product-var,$(1),PRODUCT_PACKAGES_DEBUG_JAVA_COVERAGE)) \
+    $(if $(filter arm64,$(TARGET_ARCH) $(TARGET_2ND_ARCH)),$(call get-product-var,$(1),PRODUCT_PACKAGES_ARM64)) \
+    $(if $(PRODUCT_SHIPPING_API_LEVEL), \
+      $(if $(call math_gt_or_eq,29,$(PRODUCT_SHIPPING_API_LEVEL)),$(call get-product-var,$(1),PRODUCT_PACKAGES_SHIPPING_API_LEVEL_29)) \
+      $(if $(call math_gt_or_eq,33,$(PRODUCT_SHIPPING_API_LEVEL)),$(call get-product-var,$(1),PRODUCT_PACKAGES_SHIPPING_API_LEVEL_33)) \
+      $(if $(call math_gt_or_eq,34,$(PRODUCT_SHIPPING_API_LEVEL)),$(call get-product-var,$(1),PRODUCT_PACKAGES_SHIPPING_API_LEVEL_34)) \
+    ) \
     $(call auto-included-modules) \
   ) \
   $(eval ### Filter out the overridden packages and executables before doing expansion) \
@@ -1212,7 +1036,14 @@ define product-installed-files
   $(eval ### Resolve the :32 :64 module name) \
   $(eval _pif_modules := $(sort $(call resolve-bitness-for-modules,TARGET,$(_pif_modules)))) \
   $(call expand-required-modules,_pif_modules,$(_pif_modules),$(_pif_overrides)) \
-  $(filter-out $(HOST_OUT_ROOT)/%,$(call module-installed-files, $(_pif_modules))) \
+  $(_pif_modules)
+endef
+
+# Lists most of the files a particular product installs.
+# It gives all the installed files for all modules returned by product-installed-modules,
+# and also includes PRODUCT_COPY_FILES.
+define product-installed-files
+  $(filter-out $(HOST_OUT_ROOT)/%,$(call module-installed-files, $(call product-installed-modules,$(1)))) \
   $(call resolve-product-relative-paths,\
     $(foreach cf,$(call get-product-var,$(1),PRODUCT_COPY_FILES),$(call word-colon,2,$(cf))))
 endef
@@ -1245,7 +1076,11 @@ $(if $(strip $(1)), \
 )
 endef
 
-ifdef FULL_BUILD
+ifeq ($(HOST_OS),darwin)
+  # Target builds are not supported on Mac
+  product_target_FILES :=
+  product_host_FILES := $(call host-installed-files,$(INTERNAL_PRODUCT))
+else ifdef FULL_BUILD
   ifneq (true,$(ALLOW_MISSING_DEPENDENCIES))
     # Check to ensure that all modules in PRODUCT_PACKAGES exist (opt in per product)
     ifeq (true,$(PRODUCT_ENFORCE_PACKAGES_EXIST))
@@ -1260,8 +1095,10 @@ ifdef FULL_BUILD
         $(if $(or $(ALL_MODULES.$(m).PATH),$(call get-modules-for-2nd-arch,TARGET,$(m))),,$(m)))
       $(call maybe-print-list-and-error,$(filter-out $(_allow_list),$(_nonexistent_modules)),\
         $(INTERNAL_PRODUCT) includes non-existent modules in PRODUCT_PACKAGES)
-      $(call maybe-print-list-and-error,$(filter-out $(_nonexistent_modules),$(_allow_list)),\
-        $(INTERNAL_PRODUCT) includes redundant allow list entries for non-existent PRODUCT_PACKAGES)
+      # TODO(b/182105280): Consider re-enabling this check when the ART modules
+      # have been cleaned up from the allowed_list in target/product/generic.mk.
+      #$(call maybe-print-list-and-error,$(filter-out $(_nonexistent_modules),$(_allow_list)),\
+      #  $(INTERNAL_PRODUCT) includes redundant allow list entries for non-existent PRODUCT_PACKAGES)
     endif
 
     # Check to ensure that all modules in PRODUCT_HOST_PACKAGES exist
@@ -1292,6 +1129,13 @@ ifdef FULL_BUILD
                   $(if $(ALL_MODULES.$(m).INSTALLED),\
                     $(if $(filter-out $(HOST_OUT_ROOT)/%,$(ALL_MODULES.$(m).INSTALLED)),,\
                       $(m))))
+    ifeq ($(TARGET_ARCH),riscv64)
+      # HACK: riscv64 can't build the device version of bcc and ld.mc due to a
+      # dependency on an old version of LLVM, but they are listed in
+      # base_system.mk which can't add them conditionally based on the target
+      # architecture.
+      _host_modules := $(filter-out bcc ld.mc,$(_host_modules))
+    endif
     $(call maybe-print-list-and-error,$(sort $(_host_modules)),\
       Host modules should be in PRODUCT_HOST_PACKAGES$(comma) not PRODUCT_PACKAGES)
   endif
@@ -1299,11 +1143,12 @@ ifdef FULL_BUILD
   product_host_FILES := $(call host-installed-files,$(INTERNAL_PRODUCT))
   product_target_FILES := $(call product-installed-files, $(INTERNAL_PRODUCT))
   # WARNING: The product_MODULES variable is depended on by external files.
+  # It contains the list of register names that will be installed on the device
   product_MODULES := $(_pif_modules)
 
   # Verify the artifact path requirements made by included products.
   is_asan := $(if $(filter address,$(SANITIZE_TARGET)),true)
-  ifneq (true,$(or $(is_asan),$(DISABLE_ARTIFACT_PATH_REQUIREMENTS)))
+  ifeq (,$(or $(is_asan),$(DISABLE_ARTIFACT_PATH_REQUIREMENTS)))
     include $(BUILD_SYSTEM)/artifact_path_requirements.mk
   endif
 else
@@ -1323,6 +1168,54 @@ modules_to_install := $(sort \
     $(product_host_FILES) \
     $(CUSTOM_MODULES) \
   )
+
+# Deduplicate compatibility suite dist files across modules and packages before
+# copying them to their requested locations. Assign the eval result to an unused
+# var to prevent Make from trying to make a sense of it.
+_unused := $(call copy-many-files, $(sort $(ALL_COMPATIBILITY_DIST_FILES)))
+
+ifdef is_sdk_build
+  # Ensure every module listed in PRODUCT_PACKAGES* gets something installed
+  # TODO: Should we do this for all builds and not just the sdk?
+  dangling_modules :=
+  $(foreach m, $(PRODUCT_PACKAGES), \
+    $(if $(strip $(ALL_MODULES.$(m).INSTALLED) $(ALL_MODULES.$(m)$(TARGET_2ND_ARCH_MODULE_SUFFIX).INSTALLED)),,\
+      $(eval dangling_modules += $(m))))
+  ifneq ($(dangling_modules),)
+    $(warning: Modules '$(dangling_modules)' in PRODUCT_PACKAGES have nothing to install!)
+  endif
+  $(foreach m, $(PRODUCT_PACKAGES_DEBUG), \
+    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
+      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_DEBUG has nothing to install!)))
+  $(foreach m, $(PRODUCT_PACKAGES_ENG), \
+    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
+      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_ENG has nothing to install!)))
+  $(foreach m, $(PRODUCT_PACKAGES_TESTS), \
+    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
+      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_TESTS has nothing to install!)))
+endif
+
+ifneq ($(TARGET_BUILD_APPS),)
+  # If this build is just for apps, only build apps and not the full system by default.
+  ifneq ($(filter all,$(TARGET_BUILD_APPS)),)
+    # The magic goal "all" used to build all apps in the source tree. This was deprecated
+    # so that we can know all TARGET_BUILD_APPS apps are built with soong for soong-only builds.
+    $(error TARGET_BUILD_APPS=all is deprecated)
+  else
+    unbundled_build_modules := $(sort $(TARGET_BUILD_APPS))
+  endif
+endif
+
+# build/make/core/Makefile contains extra stuff that we don't want to pollute this
+# top-level makefile with.  It expects that ALL_DEFAULT_INSTALLED_MODULES
+# contains everything that's built during the current make, but it also further
+# extends ALL_DEFAULT_INSTALLED_MODULES.
+ALL_DEFAULT_INSTALLED_MODULES := $(modules_to_install)
+ifeq ($(HOST_OS),linux)
+  include $(BUILD_SYSTEM)/Makefile
+endif
+modules_to_install := $(sort $(ALL_DEFAULT_INSTALLED_MODULES))
+ALL_DEFAULT_INSTALLED_MODULES :=
 
 ifdef FULL_BUILD
 #
@@ -1347,62 +1240,10 @@ $(file >$(HOST_OUT)/.installable_test_files,$(sort \
 test_files :=
 endif
 
-# Dedpulicate compatibility suite dist files across modules and packages before
-# copying them to their requested locations. Assign the eval result to an unused
-# var to prevent Make from trying to make a sense of it.
-_unused := $(call copy-many-files, $(sort $(ALL_COMPATIBILITY_DIST_FILES)))
-
-# Don't include any GNU General Public License shared objects or static
-# libraries in SDK images.  GPL executables (not static/dynamic libraries)
-# are okay if they don't link against any closed source libraries (directly
-# or indirectly)
-
-# It's ok (and necessary) to build the host tools, but nothing that's
-# going to be installed on the target (including static libraries).
-
-ifdef is_sdk_build
-  target_gnu_MODULES := \
-              $(filter \
-                      $(TARGET_OUT_INTERMEDIATES)/% \
-                      $(TARGET_OUT)/% \
-                      $(TARGET_OUT_DATA)/%, \
-                              $(sort $(call get-tagged-modules,gnu)))
-  target_gnu_MODULES := $(filter-out $(TARGET_OUT_EXECUTABLES)/%,$(target_gnu_MODULES))
-  target_gnu_MODULES := $(filter-out %/libopenjdkjvmti.so,$(target_gnu_MODULES))
-  target_gnu_MODULES := $(filter-out %/libopenjdkjvmtid.so,$(target_gnu_MODULES))
-  $(info Removing from sdk:)$(foreach d,$(target_gnu_MODULES),$(info : $(d)))
-  modules_to_install := \
-              $(filter-out $(target_gnu_MODULES),$(modules_to_install))
-
-  # Ensure every module listed in PRODUCT_PACKAGES* gets something installed
-  # TODO: Should we do this for all builds and not just the sdk?
-  dangling_modules :=
-  $(foreach m, $(PRODUCT_PACKAGES), \
-    $(if $(strip $(ALL_MODULES.$(m).INSTALLED) $(ALL_MODULES.$(m)$(TARGET_2ND_ARCH_MODULE_SUFFIX).INSTALLED)),,\
-      $(eval dangling_modules += $(m))))
-  ifneq ($(dangling_modules),)
-    $(warning: Modules '$(dangling_modules)' in PRODUCT_PACKAGES have nothing to install!)
-  endif
-  $(foreach m, $(PRODUCT_PACKAGES_DEBUG), \
-    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
-      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_DEBUG has nothing to install!)))
-  $(foreach m, $(PRODUCT_PACKAGES_ENG), \
-    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
-      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_ENG has nothing to install!)))
-  $(foreach m, $(PRODUCT_PACKAGES_TESTS), \
-    $(if $(strip $(ALL_MODULES.$(m).INSTALLED)),,\
-      $(warning $(ALL_MODULES.$(m).MAKEFILE): Module '$(m)' in PRODUCT_PACKAGES_TESTS has nothing to install!)))
-endif
-
-# build/make/core/Makefile contains extra stuff that we don't want to pollute this
-# top-level makefile with.  It expects that ALL_DEFAULT_INSTALLED_MODULES
-# contains everything that's built during the current make, but it also further
-# extends ALL_DEFAULT_INSTALLED_MODULES.
-ALL_DEFAULT_INSTALLED_MODULES := $(modules_to_install)
-include $(BUILD_SYSTEM)/Makefile
-modules_to_install := $(sort $(ALL_DEFAULT_INSTALLED_MODULES))
-ALL_DEFAULT_INSTALLED_MODULES :=
-
+# Some notice deps refer to module names without prefix or arch suffix where
+# only the variants with them get built.
+# fix-notice-deps replaces those unadorned module names with every built variant.
+$(call fix-notice-deps)
 
 # These are additional goals that we build, in order to make sure that there
 # is as little code as possible in the tree that doesn't build.
@@ -1456,9 +1297,6 @@ ramdisk_debug: $(INSTALLED_DEBUG_RAMDISK_TARGET)
 .PHONY: ramdisk_test_harness
 ramdisk_test_harness: $(INSTALLED_TEST_HARNESS_RAMDISK_TARGET)
 
-.PHONY: vendor_ramdisk_debug
-vendor_ramdisk_debug: $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET)
-
 .PHONY: userdataimage
 userdataimage: $(INSTALLED_USERDATAIMAGE_TARGET)
 
@@ -1478,8 +1316,26 @@ vendorimage: $(INSTALLED_VENDORIMAGE_TARGET)
 .PHONY: vendorbootimage
 vendorbootimage: $(INSTALLED_VENDOR_BOOTIMAGE_TARGET)
 
+.PHONY: vendorkernelbootimage
+vendorkernelbootimage: $(INSTALLED_VENDOR_KERNEL_BOOTIMAGE_TARGET)
+
 .PHONY: vendorbootimage_debug
 vendorbootimage_debug: $(INSTALLED_VENDOR_DEBUG_BOOTIMAGE_TARGET)
+
+.PHONY: vendorbootimage_test_harness
+vendorbootimage_test_harness: $(INSTALLED_VENDOR_TEST_HARNESS_BOOTIMAGE_TARGET)
+
+.PHONY: vendorramdisk
+vendorramdisk: $(INSTALLED_VENDOR_RAMDISK_TARGET)
+
+.PHONY: vendorkernelramdisk
+vendorkernelramdisk: $(INSTALLED_VENDOR_KERNEL_RAMDISK_TARGET)
+
+.PHONY: vendorramdisk_debug
+vendorramdisk_debug: $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET)
+
+.PHONY: vendorramdisk_test_harness
+vendorramdisk_test_harness: $(INSTALLED_VENDOR_TEST_HARNESS_RAMDISK_TARGET)
 
 .PHONY: productimage
 productimage: $(INSTALLED_PRODUCTIMAGE_TARGET)
@@ -1496,6 +1352,9 @@ vendor_dlkmimage: $(INSTALLED_VENDOR_DLKMIMAGE_TARGET)
 .PHONY: odm_dlkmimage
 odm_dlkmimage: $(INSTALLED_ODM_DLKMIMAGE_TARGET)
 
+.PHONY: system_dlkmimage
+system_dlkmimage: $(INSTALLED_SYSTEM_DLKMIMAGE_TARGET)
+
 .PHONY: systemotherimage
 systemotherimage: $(INSTALLED_SYSTEMOTHERIMAGE_TARGET)
 
@@ -1504,6 +1363,13 @@ superimage_empty: $(INSTALLED_SUPERIMAGE_EMPTY_TARGET)
 
 .PHONY: bootimage
 bootimage: $(INSTALLED_BOOTIMAGE_TARGET)
+
+.PHONY: initbootimage
+initbootimage: $(INSTALLED_INIT_BOOT_IMAGE_TARGET)
+
+ifeq (true,$(PRODUCT_EXPORT_BOOT_IMAGE_TO_DIST))
+$(call dist-for-goals, bootimage, $(INSTALLED_BOOTIMAGE_TARGET))
+endif
 
 .PHONY: bootimage_debug
 bootimage_debug: $(INSTALLED_DEBUG_BOOTIMAGE_TARGET)
@@ -1520,12 +1386,19 @@ vbmetasystemimage: $(INSTALLED_VBMETA_SYSTEMIMAGE_TARGET)
 .PHONY: vbmetavendorimage
 vbmetavendorimage: $(INSTALLED_VBMETA_VENDORIMAGE_TARGET)
 
-# Build files and then package it into the rom formats
-.PHONY: droidcore
-droidcore: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) \
+.PHONY: vbmetacustomimages
+vbmetacustomimages: $(foreach partition,$(call to-upper,$(BOARD_AVB_VBMETA_CUSTOM_PARTITIONS)),$(INSTALLED_VBMETA_$(partition)IMAGE_TARGET))
+
+# The droidcore-unbundled target depends on the subset of targets necessary to
+# perform a full system build (either unbundled or not).
+.PHONY: droidcore-unbundled
+droidcore-unbundled: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) \
+    $(INSTALLED_FILES_OUTSIDE_IMAGES) \
     $(INSTALLED_SYSTEMIMAGE_TARGET) \
     $(INSTALLED_RAMDISK_TARGET) \
     $(INSTALLED_BOOTIMAGE_TARGET) \
+    $(INSTALLED_INIT_BOOT_IMAGE_TARGET) \
+    $(INSTALLED_DTBOIMAGE_TARGET) \
     $(INSTALLED_RADIOIMAGE_TARGET) \
     $(INSTALLED_DEBUG_RAMDISK_TARGET) \
     $(INSTALLED_DEBUG_BOOTIMAGE_TARGET) \
@@ -1538,14 +1411,23 @@ droidcore: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) \
     $(INSTALLED_BPTIMAGE_TARGET) \
     $(INSTALLED_VENDORIMAGE_TARGET) \
     $(INSTALLED_VENDOR_BOOTIMAGE_TARGET) \
-    $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_KERNEL_BOOTIMAGE_TARGET) \
     $(INSTALLED_VENDOR_DEBUG_BOOTIMAGE_TARGET) \
+    $(INSTALLED_VENDOR_TEST_HARNESS_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_TEST_HARNESS_BOOTIMAGE_TARGET) \
+    $(INSTALLED_VENDOR_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_KERNEL_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET) \
     $(INSTALLED_ODMIMAGE_TARGET) \
     $(INSTALLED_VENDOR_DLKMIMAGE_TARGET) \
     $(INSTALLED_ODM_DLKMIMAGE_TARGET) \
+    $(INSTALLED_SYSTEM_DLKMIMAGE_TARGET) \
     $(INSTALLED_SUPERIMAGE_EMPTY_TARGET) \
     $(INSTALLED_PRODUCTIMAGE_TARGET) \
+    $(INSTALLED_SYSTEM_EXTIMAGE_TARGET) \
     $(INSTALLED_SYSTEMOTHERIMAGE_TARGET) \
+    $(INSTALLED_TEST_HARNESS_RAMDISK_TARGET) \
+    $(INSTALLED_TEST_HARNESS_BOOTIMAGE_TARGET) \
     $(INSTALLED_FILES_FILE) \
     $(INSTALLED_FILES_JSON) \
     $(INSTALLED_FILES_FILE_VENDOR) \
@@ -1556,6 +1438,8 @@ droidcore: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) \
     $(INSTALLED_FILES_JSON_VENDOR_DLKM) \
     $(INSTALLED_FILES_FILE_ODM_DLKM) \
     $(INSTALLED_FILES_JSON_ODM_DLKM) \
+    $(INSTALLED_FILES_FILE_SYSTEM_DLKM) \
+    $(INSTALLED_FILES_JSON_SYSTEM_DLKM) \
     $(INSTALLED_FILES_FILE_PRODUCT) \
     $(INSTALLED_FILES_JSON_PRODUCT) \
     $(INSTALLED_FILES_FILE_SYSTEM_EXT) \
@@ -1570,35 +1454,36 @@ droidcore: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) \
     $(INSTALLED_FILES_JSON_VENDOR_RAMDISK) \
     $(INSTALLED_FILES_FILE_VENDOR_DEBUG_RAMDISK) \
     $(INSTALLED_FILES_JSON_VENDOR_DEBUG_RAMDISK) \
+    $(INSTALLED_FILES_FILE_VENDOR_KERNEL_RAMDISK) \
+    $(INSTALLED_FILES_JSON_VENDOR_KERNEL_RAMDISK) \
     $(INSTALLED_FILES_FILE_ROOT) \
     $(INSTALLED_FILES_JSON_ROOT) \
     $(INSTALLED_FILES_FILE_RECOVERY) \
     $(INSTALLED_FILES_JSON_RECOVERY) \
-    $(INSTALLED_ANDROID_INFO_TXT_TARGET) \
-    soong_docs
+    $(INSTALLED_ANDROID_INFO_TXT_TARGET)
+
+# The droidcore target depends on the droidcore-unbundled subset and any other
+# targets for a non-unbundled (full source) full system build.
+.PHONY: droidcore
+droidcore: droidcore-unbundled
 
 # dist_files only for putting your library into the dist directory with a full build.
 .PHONY: dist_files
 
-ifeq ($(SOONG_COLLECT_JAVA_DEPS), true)
-  $(call dist-for-goals, dist_files, $(SOONG_OUT_DIR)/module_bp_java_deps.json)
-  $(call dist-for-goals, dist_files, $(PRODUCT_OUT)/module-info.json)
-endif
+$(call dist-for-goals, dist_files, $(PRODUCT_OUT)/module-info.json)
 
 .PHONY: apps_only
-ifneq ($(TARGET_BUILD_APPS),)
+ifeq ($(HOST_OS),darwin)
+  # Mac only supports building host modules
+  droid_targets: $(filter $(HOST_OUT_ROOT)/%,$(modules_to_install)) dist_files
+
+else ifneq ($(TARGET_BUILD_APPS),)
   # If this build is just for apps, only build apps and not the full system by default.
 
-  unbundled_build_modules :=
-  ifneq ($(filter all,$(TARGET_BUILD_APPS)),)
-    # If they used the magic goal "all" then build all apps in the source tree.
-    unbundled_build_modules := $(foreach m,$(sort $(ALL_MODULES)),$(if $(filter APPS,$(ALL_MODULES.$(m).CLASS)),$(m)))
-  else
-    unbundled_build_modules := $(TARGET_BUILD_APPS)
-  endif
-
-  # Dist the installed files if they exist.
-  apps_only_installed_files := $(foreach m,$(unbundled_build_modules),$(ALL_MODULES.$(m).INSTALLED))
+  # Dist the installed files if they exist, except the installed symlinks. dist-for-goals emits
+  # `cp src dest` commands, which will fail to copy dangling symlinks.
+  apps_only_installed_files := $(foreach m,$(unbundled_build_modules),\
+    $(filter-out $(ALL_MODULES.$(m).INSTALLED_SYMLINKS),$(ALL_MODULES.$(m).INSTALLED)))
   $(call dist-for-goals,apps_only, $(apps_only_installed_files))
 
   # Dist the bundle files if they exist.
@@ -1628,43 +1513,76 @@ ifneq ($(TARGET_BUILD_APPS),)
   endif
 
   $(PROGUARD_DICT_ZIP) : $(apps_only_installed_files)
-  $(call dist-for-goals,apps_only, $(PROGUARD_DICT_ZIP))
+  $(call dist-for-goals-with-filenametag,apps_only, $(PROGUARD_DICT_ZIP) $(PROGUARD_DICT_ZIP) $(PROGUARD_DICT_MAPPING))
+  $(call declare-container-license-deps,$(PROGUARD_DICT_ZIP),$(apps_only_installed_files),$(PRODUCT_OUT)/:/)
 
   $(PROGUARD_USAGE_ZIP) : $(apps_only_installed_files)
-  $(call dist-for-goals,apps_only, $(PROGUARD_USAGE_ZIP))
+  $(call dist-for-goals-with-filenametag,apps_only, $(PROGUARD_USAGE_ZIP))
+  $(call declare-container-license-deps,$(PROGUARD_USAGE_ZIP),$(apps_only_installed_files),$(PRODUCT_OUT)/:/)
 
   $(SYMBOLS_ZIP) : $(apps_only_installed_files)
-  $(call dist-for-goals,apps_only, $(SYMBOLS_ZIP))
+  $(call dist-for-goals-with-filenametag,apps_only, $(SYMBOLS_ZIP) $(SYMBOLS_MAPPING))
+  $(call declare-container-license-deps,$(SYMBOLS_ZIP),$(apps_only_installed_files),$(PRODUCT_OUT)/:/)
 
   $(COVERAGE_ZIP) : $(apps_only_installed_files)
   $(call dist-for-goals,apps_only, $(COVERAGE_ZIP))
+  $(call declare-container-license-deps,$(COVERAGE_ZIP),$(apps_only_installed_files),$(PRODUCT_OUT)/:/)
 
 apps_only: $(unbundled_build_modules)
 
 droid_targets: apps_only
 
-# Combine the NOTICE files for a apps_only build
-$(eval $(call combine-notice-files, html, \
-    $(target_notice_file_txt), \
-    $(target_notice_file_html_or_xml), \
-    "Notices for files for apps:", \
-    $(TARGET_OUT_NOTICE_FILES), \
-    $(apps_only_installed_files)))
+# NOTICE files for a apps_only build
+$(eval $(call html-notice-rule,$(target_notice_file_html_or_xml),"Apps","Notices for files for apps:",$(unbundled_build_modules),$(PRODUCT_OUT)/ $(HOST_OUT)/))
+
+$(eval $(call text-notice-rule,$(target_notice_file_txt),"Apps","Notices for files for apps:",$(unbundled_build_modules),$(PRODUCT_OUT)/ $(HOST_OUT)/))
+
+$(call declare-0p-target,$(target_notice_file_txt))
+$(call declare-0p-target,$(target_notice_html_or_xml))
 
 
-else ifeq (,$(TARGET_BUILD_UNBUNDLED))
+else ifeq ($(TARGET_BUILD_UNBUNDLED),$(TARGET_BUILD_UNBUNDLED_IMAGE))
+
+  # Truth table for entering this block of code:
+  # TARGET_BUILD_UNBUNDLED | TARGET_BUILD_UNBUNDLED_IMAGE | Action
+  # -----------------------|------------------------------|-------------------------
+  # not set                | not set                      | droidcore path
+  # not set                | true                         | invalid
+  # true                   | not set                      | skip
+  # true                   | true                         | droidcore-unbundled path
+
+  # We dist the following targets only for droidcore full build. These items
+  # can include java-related targets that would cause building framework java
+  # sources in a droidcore full build.
+
   $(call dist-for-goals, droidcore, \
+    $(APPCOMPAT_ZIP) \
+  )
+
+  # We dist the following targets for droidcore-unbundled (and droidcore since
+  # droidcore depends on droidcore-unbundled). The droidcore-unbundled target
+  # is a subset of droidcore. It can be used used for an unbundled build to
+  # avoid disting targets that would cause building framework java sources,
+  # which we want to avoid in an unbundled build.
+
+  $(call dist-for-goals-with-filenametag, droidcore-unbundled, \
     $(INTERNAL_UPDATE_PACKAGE_TARGET) \
     $(INTERNAL_OTA_PACKAGE_TARGET) \
-    $(INTERNAL_OTA_METADATA) \
     $(INTERNAL_OTA_PARTIAL_PACKAGE_TARGET) \
+    $(BUILT_RAMDISK_16K_TARGET) \
+    $(BUILT_KERNEL_16K_TARGET) \
     $(INTERNAL_OTA_RETROFIT_DYNAMIC_PARTITIONS_PACKAGE_TARGET) \
-    $(BUILT_OTATOOLS_PACKAGE) \
     $(SYMBOLS_ZIP) \
+    $(SYMBOLS_MAPPING) \
     $(PROGUARD_DICT_ZIP) \
+    $(PROGUARD_DICT_MAPPING) \
     $(PROGUARD_USAGE_ZIP) \
+    $(BUILT_TARGET_FILES_PACKAGE) \
+  )
+
+  $(call dist-for-goals, droidcore-unbundled, \
+    $(INTERNAL_OTA_METADATA) \
     $(COVERAGE_ZIP) \
-    $(APPCOMPAT_ZIP) \
     $(INSTALLED_FILES_FILE) \
     $(INSTALLED_FILES_JSON) \
     $(INSTALLED_FILES_FILE_VENDOR) \
@@ -1675,6 +1593,8 @@ else ifeq (,$(TARGET_BUILD_UNBUNDLED))
     $(INSTALLED_FILES_JSON_VENDOR_DLKM) \
     $(INSTALLED_FILES_FILE_ODM_DLKM) \
     $(INSTALLED_FILES_JSON_ODM_DLKM) \
+    $(INSTALLED_FILES_FILE_SYSTEM_DLKM) \
+    $(INSTALLED_FILES_JSON_SYSTEM_DLKM) \
     $(INSTALLED_FILES_FILE_PRODUCT) \
     $(INSTALLED_FILES_JSON_PRODUCT) \
     $(INSTALLED_FILES_FILE_SYSTEM_EXT) \
@@ -1683,105 +1603,101 @@ else ifeq (,$(TARGET_BUILD_UNBUNDLED))
     $(INSTALLED_FILES_JSON_SYSTEMOTHER) \
     $(INSTALLED_FILES_FILE_RECOVERY) \
     $(INSTALLED_FILES_JSON_RECOVERY) \
-    $(INSTALLED_BUILD_PROP_TARGET):build.prop \
-    $(INSTALLED_VENDOR_BUILD_PROP_TARGET):build.prop-vendor \
-    $(INSTALLED_PRODUCT_BUILD_PROP_TARGET):build.prop-product \
-    $(INSTALLED_ODM_BUILD_PROP_TARGET):build.prop-odm \
-    $(INSTALLED_SYSTEM_EXT_BUILD_PROP_TARGET):build.prop-system_ext \
-    $(INSTALLED_RAMDISK_BUILD_PROP_TARGET):build.prop-ramdisk \
-    $(BUILT_TARGET_FILES_PACKAGE) \
+    $(if $(BUILDING_VENDOR_IMAGE), $(INSTALLED_VENDOR_BUILD_PROP_TARGET):build.prop-vendor) \
     $(INSTALLED_ANDROID_INFO_TXT_TARGET) \
     $(INSTALLED_MISC_INFO_TARGET) \
     $(INSTALLED_RAMDISK_TARGET) \
-   )
+    $(DEXPREOPT_CONFIG_ZIP) \
+  )
 
   # Put a copy of the radio/bootloader files in the dist dir.
   $(foreach f,$(INSTALLED_RADIOIMAGE_TARGET), \
-    $(call dist-for-goals, droidcore, $(f)))
+    $(call dist-for-goals, droidcore-unbundled, $(f)))
 
   ifneq ($(ANDROID_BUILD_EMBEDDED),true)
-    $(call dist-for-goals, droidcore, \
-      $(APPS_ZIP) \
+    $(call dist-for-goals-with-filenametag, droidcore, \
       $(INTERNAL_EMULATOR_PACKAGE_TARGET) \
     )
   endif
 
-  $(call dist-for-goals, droidcore, \
+  $(call dist-for-goals, droidcore-unbundled, \
     $(INSTALLED_FILES_FILE_ROOT) \
     $(INSTALLED_FILES_JSON_ROOT) \
   )
 
-  ifneq ($(BOARD_BUILD_SYSTEM_ROOT_IMAGE),true)
-    $(call dist-for-goals, droidcore, \
-      $(INSTALLED_FILES_FILE_RAMDISK) \
-      $(INSTALLED_FILES_JSON_RAMDISK) \
-      $(INSTALLED_FILES_FILE_DEBUG_RAMDISK) \
-      $(INSTALLED_FILES_JSON_DEBUG_RAMDISK) \
-      $(INSTALLED_FILES_FILE_VENDOR_RAMDISK) \
-      $(INSTALLED_FILES_JSON_VENDOR_RAMDISK) \
-      $(INSTALLED_FILES_FILE_VENDOR_DEBUG_RAMDISK) \
-      $(INSTALLED_FILES_JSON_VENDOR_DEBUG_RAMDISK) \
-      $(INSTALLED_DEBUG_RAMDISK_TARGET) \
-      $(INSTALLED_DEBUG_BOOTIMAGE_TARGET) \
-      $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET) \
-      $(INSTALLED_VENDOR_DEBUG_BOOTIMAGE_TARGET) \
-    )
-    $(call dist-for-goals, bootimage_test_harness, \
-      $(INSTALLED_TEST_HARNESS_RAMDISK_TARGET) \
-      $(INSTALLED_TEST_HARNESS_BOOTIMAGE_TARGET) \
-    )
+  $(call dist-for-goals, droidcore-unbundled, \
+    $(INSTALLED_FILES_FILE_RAMDISK) \
+    $(INSTALLED_FILES_JSON_RAMDISK) \
+    $(INSTALLED_FILES_FILE_DEBUG_RAMDISK) \
+    $(INSTALLED_FILES_JSON_DEBUG_RAMDISK) \
+    $(INSTALLED_FILES_FILE_VENDOR_RAMDISK) \
+    $(INSTALLED_FILES_JSON_VENDOR_RAMDISK) \
+    $(INSTALLED_FILES_FILE_VENDOR_KERNEL_RAMDISK) \
+    $(INSTALLED_FILES_JSON_VENDOR_KERNEL_RAMDISK) \
+    $(INSTALLED_FILES_FILE_VENDOR_DEBUG_RAMDISK) \
+    $(INSTALLED_FILES_JSON_VENDOR_DEBUG_RAMDISK) \
+    $(INSTALLED_DEBUG_RAMDISK_TARGET) \
+    $(INSTALLED_DEBUG_BOOTIMAGE_TARGET) \
+    $(INSTALLED_TEST_HARNESS_RAMDISK_TARGET) \
+    $(INSTALLED_TEST_HARNESS_BOOTIMAGE_TARGET) \
+    $(INSTALLED_VENDOR_DEBUG_BOOTIMAGE_TARGET) \
+    $(INSTALLED_VENDOR_TEST_HARNESS_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_TEST_HARNESS_BOOTIMAGE_TARGET) \
+    $(INSTALLED_VENDOR_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_DEBUG_RAMDISK_TARGET) \
+    $(INSTALLED_VENDOR_KERNEL_RAMDISK_TARGET) \
+  )
+
+  ifeq ($(PRODUCT_EXPORT_BOOT_IMAGE_TO_DIST),true)
+    $(call dist-for-goals, droidcore-unbundled, $(INSTALLED_BOOTIMAGE_TARGET))
   endif
 
   ifeq ($(BOARD_USES_RECOVERY_AS_BOOT),true)
-    $(call dist-for-goals, droidcore, \
+    $(call dist-for-goals, droidcore-unbundled, \
       $(recovery_ramdisk) \
     )
   endif
 
   ifeq ($(EMMA_INSTRUMENT),true)
-    $(JACOCO_REPORT_CLASSES_ALL) : $(modules_to_install)
     $(call dist-for-goals, dist_files, $(JACOCO_REPORT_CLASSES_ALL))
   endif
-
-  # Put XML formatted API files in the dist dir.
-  $(TARGET_OUT_COMMON_INTERMEDIATES)/api.xml: $(call java-lib-files,android_stubs_current) $(APICHECK)
-  $(TARGET_OUT_COMMON_INTERMEDIATES)/system-api.xml: $(call java-lib-files,android_system_stubs_current) $(APICHECK)
-  $(TARGET_OUT_COMMON_INTERMEDIATES)/module-lib-api.xml: $(call java-lib-files,android_module_lib_stubs_current) $(APICHECK)
-  $(TARGET_OUT_COMMON_INTERMEDIATES)/system-server-api.xml: $(call java-lib-files,android_system_server_stubs_current) $(APICHECK)
-  $(TARGET_OUT_COMMON_INTERMEDIATES)/test-api.xml: $(call java-lib-files,android_test_stubs_current) $(APICHECK)
-
-  api_xmls := $(addprefix $(TARGET_OUT_COMMON_INTERMEDIATES)/,api.xml system-api.xml module-lib-api.xml system-server-api.xml test-api.xml)
-  $(api_xmls):
-	$(hide) echo "Converting API file to XML: $@"
-	$(hide) mkdir -p $(dir $@)
-	$(hide) $(APICHECK_COMMAND) --input-api-jar $< --api-xml $@
-
-  $(call dist-for-goals, dist_files, $(api_xmls))
-  api_xmls :=
 
   ifdef CLANG_COVERAGE
     $(foreach f,$(SOONG_NDK_API_XML), \
         $(call dist-for-goals,droidcore,$(f):ndk_apis/$(notdir $(f))))
+    $(foreach f,$(SOONG_CC_API_XML), \
+        $(call dist-for-goals,droidcore,$(f):cc_apis/$(notdir $(f))))
   endif
 
-# Building a full system-- the default is to build droidcore
-droid_targets: droidcore dist_files
+  # For full system build (whether unbundled or not), we configure
+  # droid_targets to depend on droidcore-unbundled, which will set up the full
+  # system dependencies and also dist the subset of targets that correspond to
+  # an unbundled build (exclude building some framework sources).
 
-endif # !TARGET_BUILD_UNBUNDLED
+  droid_targets: droidcore-unbundled
+
+  ifeq (,$(TARGET_BUILD_UNBUNDLED_IMAGE))
+
+    # If we're building a full system (including the framework sources excluded
+    # by droidcore-unbundled), we configure droid_targets also to depend on
+    # droidcore, which includes all dist for droidcore, and will build the
+    # necessary framework sources.
+
+    droid_targets: droidcore dist_files
+
+  endif
+
+endif # TARGET_BUILD_UNBUNDLED == TARGET_BUILD_UNBUNDLED_IMAGE
 
 .PHONY: docs
 docs: $(ALL_DOCS)
 
-.PHONY: sdk win_sdk winsdk-tools sdk_addon
+.PHONY: sdk sdk_addon
+ifeq ($(HOST_OS),linux)
 ALL_SDK_TARGETS := $(INTERNAL_SDK_TARGET)
 sdk: $(ALL_SDK_TARGETS)
-$(call dist-for-goals,sdk win_sdk, \
-    $(ALL_SDK_TARGETS) \
-    $(SYMBOLS_ZIP) \
-    $(COVERAGE_ZIP) \
-    $(APPCOMPAT_ZIP) \
-    $(INSTALLED_BUILD_PROP_TARGET) \
-)
+$(call dist-for-goals-with-filenametag,sdk,$(ALL_SDK_TARGETS))
+endif
 
 # umbrella targets to assit engineers in verifying builds
 .PHONY: java native target host java-host java-target native-host native-target \
@@ -1805,36 +1721,14 @@ tests : host-tests target-tests
 .PHONY: findbugs
 findbugs: $(INTERNAL_FINDBUGS_HTML_TARGET) $(INTERNAL_FINDBUGS_XML_TARGET)
 
-LSDUMP_PATHS_FILE := $(PRODUCT_OUT)/lsdump_paths.txt
-
-.PHONY: findlsdumps
-# LSDUMP_PATHS is a list of tag:path.
-findlsdumps: $(LSDUMP_PATHS_FILE) $(foreach p,$(LSDUMP_PATHS),$(call word-colon,2,$(p)))
-
-$(LSDUMP_PATHS_FILE): PRIVATE_LSDUMP_PATHS := $(LSDUMP_PATHS)
-$(LSDUMP_PATHS_FILE):
-	@echo "Generate $@"
-	@rm -rf $@ && echo -e "$(subst :,:$(space),$(subst $(space),\n,$(PRIVATE_LSDUMP_PATHS)))" > $@
-
 .PHONY: check-elf-files
 check-elf-files:
-
-#xxx scrape this from ALL_MODULE_NAME_TAGS
-.PHONY: modules
-modules:
-	@echo "Available sub-modules:"
-	@echo "$(call module-names-for-tag-list,$(ALL_MODULE_TAGS))" | \
-	      tr -s ' ' '\n' | sort -u
 
 .PHONY: dump-files
 dump-files:
 	@echo "Target files for $(TARGET_PRODUCT)-$(TARGET_BUILD_VARIANT) ($(INTERNAL_PRODUCT)):"
 	@echo $(sort $(patsubst $(PRODUCT_OUT)/%,%,$(filter $(PRODUCT_OUT)/%,$(modules_to_install)))) | tr -s ' ' '\n'
 	@echo Successfully dumped product target file list.
-
-.PHONY: nothing
-nothing:
-	@echo Successfully read the makefiles.
 
 .PHONY: tidy_only
 tidy_only:
@@ -1843,11 +1737,242 @@ tidy_only:
 ndk: $(SOONG_OUT_DIR)/ndk.timestamp
 .PHONY: ndk
 
-# Checks that build/soong/apex/allowed_deps.txt remains up to date
+# Checks that allowed_deps.txt remains up to date
 ifneq ($(UNSAFE_DISABLE_APEX_ALLOWED_DEPS_CHECK),true)
   droidcore: ${APEX_ALLOWED_DEPS_CHECK}
 endif
 
+# Create a license metadata rule per module. Could happen in base_rules.mk or
+# notice_files.mk; except, it has to happen after fix-notice-deps to avoid
+# missing dependency errors.
+$(call build-license-metadata)
+
+# Generate SBOM in SPDX format
+product_copy_files_without_owner := $(foreach pcf,$(PRODUCT_COPY_FILES),$(call word-colon,1,$(pcf)):$(call word-colon,2,$(pcf)))
+ifeq ($(TARGET_BUILD_APPS),)
+dest_files_without_source := $(sort $(foreach pcf,$(product_copy_files_without_owner),$(if $(wildcard $(call word-colon,1,$(pcf))),,$(call word-colon,2,$(pcf)))))
+dest_files_without_source := $(addprefix $(PRODUCT_OUT)/,$(dest_files_without_source))
+filter_out_files := \
+  $(PRODUCT_OUT)/apex/% \
+  $(PRODUCT_OUT)/fake_packages/% \
+  $(PRODUCT_OUT)/testcases/% \
+  $(dest_files_without_source) \
+  $(PRODUCT_OUT)/required_images
+# Check if each partition image is built, if not filter out all its installed files
+# Also check if a partition uses prebuilt image file, save the info if prebuilt image is used.
+PREBUILT_PARTITION_COPY_FILES :=
+# product.img
+ifndef BUILDING_PRODUCT_IMAGE
+filter_out_files += $(PRODUCT_OUT)/product/%
+ifdef BOARD_PREBUILT_PRODUCTIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_PRODUCTIMAGE):$(INSTALLED_PRODUCTIMAGE_TARGET)
+endif
+endif
+
+# system.img
+ifndef BUILDING_SYSTEM_IMAGE
+filter_out_files += $(PRODUCT_OUT)/system/%
+endif
+# system_dlkm.img
+ifndef BUILDING_SYSTEM_DLKM_IMAGE
+filter_out_files += $(PRODUCT_OUT)/system_dlkm/%
+ifdef BOARD_PREBUILT_SYSTEM_DLKMIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_SYSTEM_DLKMIMAGE):$(INSTALLED_SYSTEM_DLKMIMAGE_TARGET)
+endif
+endif
+# system_ext.img
+ifndef BUILDING_SYSTEM_EXT_IMAGE
+filter_out_files += $(PRODUCT_OUT)/system_ext/%
+ifdef BOARD_PREBUILT_SYSTEM_EXTIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_SYSTEM_EXTIMAGE):$(INSTALLED_SYSTEM_EXTIMAGE_TARGET)
+endif
+endif
+# system_other.img
+ifndef BUILDING_SYSTEM_OTHER_IMAGE
+filter_out_files += $(PRODUCT_OUT)/system_other/%
+endif
+
+# odm.img
+ifndef BUILDING_ODM_IMAGE
+filter_out_files += $(PRODUCT_OUT)/odm/%
+ifdef BOARD_PREBUILT_ODMIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_ODMIMAGE):$(INSTALLED_ODMIMAGE_TARGET)
+endif
+endif
+# odm_dlkm.img
+ifndef BUILDING_ODM_DLKM_IMAGE
+filter_out_files += $(PRODUCT_OUT)/odm_dlkm/%
+ifdef BOARD_PREBUILT_ODM_DLKMIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_ODM_DLKMIMAGE):$(INSTALLED_ODM_DLKMIMAGE_TARGET)
+endif
+endif
+
+# vendor.img
+ifndef BUILDING_VENDOR_IMAGE
+filter_out_files += $(PRODUCT_OUT)/vendor/%
+ifdef BOARD_PREBUILT_VENDORIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_VENDORIMAGE):$(INSTALLED_VENDORIMAGE_TARGET)
+endif
+endif
+# vendor_dlkm.img
+ifndef BUILDING_VENDOR_DLKM_IMAGE
+filter_out_files += $(PRODUCT_OUT)/vendor_dlkm/%
+ifdef BOARD_PREBUILT_VENDOR_DLKMIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_VENDOR_DLKMIMAGE):$(INSTALLED_VENDOR_DLKMIMAGE_TARGET)
+endif
+endif
+
+# cache.img
+ifndef BUILDING_CACHE_IMAGE
+filter_out_files += $(PRODUCT_OUT)/cache/%
+endif
+
+# boot.img
+ifndef BUILDING_BOOT_IMAGE
+ifdef BOARD_PREBUILT_BOOTIMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_BOOTIMAGE):$(INSTALLED_BOOTIMAGE_TARGET)
+endif
+endif
+# init_boot.img
+ifndef BUILDING_INIT_BOOT_IMAGE
+ifdef BOARD_PREBUILT_INIT_BOOT_IMAGE
+PREBUILT_PARTITION_COPY_FILES += $(BOARD_PREBUILT_INIT_BOOT_IMAGE):$(INSTALLED_INIT_BOOT_IMAGE_TARGET)
+endif
+endif
+
+# ramdisk.img
+ifndef BUILDING_RAMDISK_IMAGE
+filter_out_files += $(PRODUCT_OUT)/ramdisk/%
+endif
+
+# recovery.img
+ifndef INSTALLED_RECOVERYIMAGE_TARGET
+filter_out_files += $(PRODUCT_OUT)/recovery/%
+endif
+
+# userdata.img
+ifndef BUILDING_USERDATA_IMAGE
+filter_out_files += $(PRODUCT_OUT)/data/%
+endif
+
+installed_files := $(sort $(filter-out $(filter_out_files),$(filter $(PRODUCT_OUT)/%,$(modules_to_install))))
+else
+installed_files := $(apps_only_installed_files)
+endif  # TARGET_BUILD_APPS
+
+metadata_list := $(OUT_DIR)/.module_paths/METADATA.list
+metadata_files := $(subst $(newline),$(space),$(file <$(metadata_list)))
+
+# Create metadata for compliance support in Soong
+.PHONY: make-compliance-metadata
+make-compliance-metadata: \
+    $(SOONG_OUT_DIR)/compliance-metadata/$(TARGET_PRODUCT)/make-metadata.csv \
+    $(SOONG_OUT_DIR)/compliance-metadata/$(TARGET_PRODUCT)/make-modules.csv
+
+$(SOONG_OUT_DIR)/compliance-metadata/$(TARGET_PRODUCT)/make-metadata.csv:
+	rm -f $@
+	echo 'installed_file,module_path,is_soong_module,is_prebuilt_make_module,product_copy_files,kernel_module_copy_files,is_platform_generated,static_libs,whole_static_libs,license_text' >> $@
+	$(foreach f,$(installed_files),\
+	  $(eval _module_name := $(ALL_INSTALLED_FILES.$f)) \
+	  $(eval _path_on_device := $(patsubst $(PRODUCT_OUT)/%,%,$f)) \
+	  $(eval _build_output_path := $(PRODUCT_OUT)/$(_path_on_device)) \
+	  $(eval _module_path := $(strip $(sort $(ALL_MODULES.$(_module_name).PATH)))) \
+	  $(eval _is_soong_module := $(ALL_MODULES.$(_module_name).IS_SOONG_MODULE)) \
+	  $(eval _is_prebuilt_make_module := $(ALL_MODULES.$(_module_name).IS_PREBUILT_MAKE_MODULE)) \
+	  $(eval _product_copy_files := $(sort $(filter %:$(_path_on_device),$(product_copy_files_without_owner)))) \
+	  $(eval _kernel_module_copy_files := $(sort $(filter %$(_path_on_device),$(KERNEL_MODULE_COPY_FILES)))) \
+	  $(eval _is_build_prop := $(call is-build-prop,$f)) \
+	  $(eval _is_notice_file := $(call is-notice-file,$f)) \
+	  $(eval _is_product_system_other_avbkey := $(if $(findstring $f,$(INSTALLED_PRODUCT_SYSTEM_OTHER_AVBKEY_TARGET)),Y)) \
+	  $(eval _is_event_log_tags_file := $(if $(findstring $f,$(event_log_tags_file)),Y)) \
+	  $(eval _is_system_other_odex_marker := $(if $(findstring $f,$(INSTALLED_SYSTEM_OTHER_ODEX_MARKER)),Y)) \
+	  $(eval _is_kernel_modules_blocklist := $(if $(findstring $f,$(ALL_KERNEL_MODULES_BLOCKLIST)),Y)) \
+	  $(eval _is_fsverity_build_manifest_apk := $(if $(findstring $f,$(ALL_FSVERITY_BUILD_MANIFEST_APK)),Y)) \
+	  $(eval _is_linker_config := $(if $(findstring $f,$(SYSTEM_LINKER_CONFIG) $(vendor_linker_config_file) $(product_linker_config_file)),Y)) \
+	  $(eval _is_partition_compat_symlink := $(if $(findstring $f,$(PARTITION_COMPAT_SYMLINKS)),Y)) \
+	  $(eval _is_flags_file := $(if $(findstring $f, $(ALL_FLAGS_FILES)),Y)) \
+	  $(eval _is_rootdir_symlink := $(if $(findstring $f, $(ALL_ROOTDIR_SYMLINKS)),Y)) \
+	  $(eval _is_platform_generated := $(if $(_is_soong_module),,$(_is_build_prop)$(_is_notice_file)$(_is_product_system_other_avbkey)$(_is_event_log_tags_file)$(_is_system_other_odex_marker)$(_is_kernel_modules_blocklist)$(_is_fsverity_build_manifest_apk)$(_is_linker_config)$(_is_partition_compat_symlink)$(_is_flags_file)$(_is_rootdir_symlink))) \
+	  $(eval _static_libs := $(if $(_is_soong_module),,$(ALL_INSTALLED_FILES.$f.STATIC_LIBRARIES))) \
+	  $(eval _whole_static_libs := $(if $(_is_soong_module),,$(ALL_INSTALLED_FILES.$f.WHOLE_STATIC_LIBRARIES))) \
+	  $(eval _license_text := $(if $(filter $(_build_output_path),$(ALL_NON_MODULES)),$(ALL_NON_MODULES.$(_build_output_path).NOTICES),\
+	                          $(if $(_is_partition_compat_symlink),build/soong/licenses/LICENSE))) \
+	  echo '$(_build_output_path),$(_module_path),$(_is_soong_module),$(_is_prebuilt_make_module),$(_product_copy_files),$(_kernel_module_copy_files),$(_is_platform_generated),$(_static_libs),$(_whole_static_libs),$(_license_text)' >> $@; \
+	)
+
+$(SOONG_OUT_DIR)/compliance-metadata/$(TARGET_PRODUCT)/make-modules.csv:
+	rm -f $@
+	echo 'name,module_path,module_class,module_type,static_libs,whole_static_libs,built_files,installed_files' >> $@
+	$(foreach m,$(ALL_MODULES), \
+	  $(eval _module_name := $m) \
+	  $(eval _module_path := $(strip $(sort $(ALL_MODULES.$(_module_name).PATH)))) \
+	  $(eval _make_module_class := $(ALL_MODULES.$(_module_name).CLASS)) \
+	  $(eval _make_module_type := $(ALL_MODULES.$(_module_name).MAKE_MODULE_TYPE)) \
+	  $(eval _static_libs := $(strip $(sort $(ALL_MODULES.$(_module_name).STATIC_LIBS)))) \
+	  $(eval _whole_static_libs := $(strip $(sort $(ALL_MODULES.$(_module_name).WHOLE_STATIC_LIBS)))) \
+	  $(eval _built_files := $(strip $(sort $(ALL_MODULES.$(_module_name).BUILT)))) \
+	  $(eval _installed_files := $(strip $(sort $(ALL_MODULES.$(_module_name).INSTALLED)))) \
+	  $(eval _is_soong_module := $(ALL_MODULES.$(_module_name).IS_SOONG_MODULE)) \
+	  $(if $(_is_soong_module),, \
+		echo '$(_module_name),$(_module_path),$(_make_module_class),$(_make_module_type),$(_static_libs),$(_whole_static_libs),$(_built_files),$(_installed_files)' >> $@; \
+	  ) \
+	)
+
+$(SOONG_OUT_DIR)/compliance-metadata/$(TARGET_PRODUCT)/installed_files.stamp: $(installed_files)
+	touch $@
+
+# Remove the always_dirty_file.txt whenever the makefile is evaluated
+$(shell rm -f $(PRODUCT_OUT)/always_dirty_file.txt)
+$(PRODUCT_OUT)/always_dirty_file.txt:
+	touch $@
+
+.PHONY: sbom
+ifneq ($(TARGET_BUILD_APPS),)
+# Create build rules for generating SBOMs of unbundled APKs and APEXs
+# $1: sbom file
+# $2: sbom fragment file
+# $3: installed file
+# $4: sbom-metadata.csv file
+define generate-app-sbom
+$(eval _path_on_device := $(patsubst $(PRODUCT_OUT)/%,%,$(3)))
+$(eval _module_name := $(ALL_INSTALLED_FILES.$(3)))
+$(eval _module_path := $(strip $(sort $(ALL_MODULES.$(_module_name).PATH))))
+$(eval _soong_module_type := $(strip $(sort $(ALL_MODULES.$(_module_name).SOONG_MODULE_TYPE))))
+$(eval _dep_modules := $(filter %.$(_module_name),$(ALL_MODULES)) $(filter %.$(_module_name)$(TARGET_2ND_ARCH_MODULE_SUFFIX),$(ALL_MODULES)))
+$(eval _is_apex := $(filter %.apex,$(3)))
+
+$(4):
+	rm -rf $$@
+	echo installed_file,module_path,soong_module_type,is_prebuilt_make_module,product_copy_files,kernel_module_copy_files,is_platform_generated,build_output_path,static_libraries,whole_static_libraries,is_static_lib >> $$@
+	echo /$(_path_on_device),$(_module_path),$(_soong_module_type),,,,,$(3),,, >> $$@
+	$(if $(filter %.apex,$(3)),\
+	  $(foreach m,$(_dep_modules),\
+	    echo $(patsubst $(PRODUCT_OUT)/apex/$(_module_name)/%,%,$(ALL_MODULES.$m.INSTALLED)),$(sort $(ALL_MODULES.$m.PATH)),$(sort $(ALL_MODULES.$m.SOONG_MODULE_TYPE)),,,,,$(strip $(ALL_MODULES.$m.BUILT)),,, >> $$@;))
+
+$(2): $(1)
+$(1): $(4) $(3) $(GEN_SBOM) $(installed_files) $(metadata_list) $(metadata_files)
+	rm -rf $$@
+	$(GEN_SBOM) --output_file $$@ --metadata $(4) --build_version $$(BUILD_FINGERPRINT_FROM_FILE) --product_mfr "$(PRODUCT_MANUFACTURER)" --json $(if $(filter %.apk,$(3)),--unbundled_apk,--unbundled_apex)
+endef
+
+apps_only_sbom_files :=
+apps_only_fragment_files :=
+$(foreach f,$(filter %.apk %.apex,$(installed_files)), \
+  $(eval _metadata_csv_file := $(patsubst %,%-sbom-metadata.csv,$f)) \
+  $(eval _sbom_file := $(patsubst %,%.spdx.json,$f)) \
+  $(eval _fragment_file := $(patsubst %,%-fragment.spdx,$f)) \
+  $(eval apps_only_sbom_files += $(_sbom_file)) \
+  $(eval apps_only_fragment_files += $(_fragment_file)) \
+  $(eval $(call generate-app-sbom,$(_sbom_file),$(_fragment_file),$f,$(_metadata_csv_file))) \
+)
+
+sbom: $(apps_only_sbom_files)
+
+$(foreach f,$(apps_only_fragment_files),$(eval apps_only_fragment_dist_files += :sbom/$(notdir $f)))
+$(foreach f,$(apps_only_sbom_files),$(eval apps_only_sbom_dist_files += :sbom/$(notdir $f)))
+$(call dist-for-goals,apps_only,$(join $(apps_only_sbom_files),$(apps_only_sbom_dist_files)) $(join $(apps_only_fragment_files),$(apps_only_fragment_dist_files)))
+endif
+
 $(call dist-write-file,$(KATI_PACKAGE_MK_DIR)/dist.mk)
 
-$(info [$(call inc_and_print,subdir_makefiles_inc)/$(subdir_makefiles_total)] writing build rules ...)
+$(info [$(call inc_and_print,subdir_makefiles_inc)/$(subdir_makefiles_total)] writing legacy Make module rules ...)

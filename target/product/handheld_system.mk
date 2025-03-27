@@ -27,22 +27,26 @@ $(call inherit-product-if-exists, external/google-fonts/cutive-mono/fonts.mk)
 $(call inherit-product-if-exists, external/google-fonts/source-sans-pro/fonts.mk)
 $(call inherit-product-if-exists, external/noto-fonts/fonts.mk)
 $(call inherit-product-if-exists, external/roboto-fonts/fonts.mk)
+$(call inherit-product-if-exists, external/roboto-flex-fonts/fonts.mk)
 $(call inherit-product-if-exists, external/hyphenation-patterns/patterns.mk)
 $(call inherit-product-if-exists, frameworks/base/data/keyboards/keyboards.mk)
 $(call inherit-product-if-exists, frameworks/webview/chromium/chromium.mk)
 
 PRODUCT_PACKAGES += \
+    android.software.window_magnification.prebuilt.xml \
     BasicDreams \
     BlockedNumberProvider \
-    Bluetooth \
     BluetoothMidiService \
     BookmarkProvider \
     BuiltInPrintService \
     CalendarProvider \
     cameraserver \
+    CameraExtensionsProxy \
     CaptivePortalLogin \
     CertInstaller \
-    clatd \
+    CredentialManager \
+    DeviceAsWebcam \
+    DeviceDiagnostics \
     DocumentsUI \
     DownloadProviderUi \
     EasterEgg \
@@ -55,8 +59,8 @@ PRODUCT_PACKAGES += \
     MmsService \
     MtpService \
     MusicFX \
-    NfcNci \
     PacProcessor \
+    preinstalled-packages-platform-handheld-system.xml \
     PrintRecommendationService \
     PrintSpooler \
     ProxyHandler \
@@ -65,13 +69,24 @@ PRODUCT_PACKAGES += \
     SharedStorageBackup \
     SimAppDialog \
     Telecom \
-    TelephonyProvider \
     TeleService \
     Traceur \
     UserDictionaryProvider \
     VpnDialogs \
     vr \
 
+# Choose the correct products based on HSUM status
+ifeq ($(PRODUCT_USE_HSUM),true)
+  PRODUCT_PACKAGES += TelephonyProviderHsum
+else
+  PRODUCT_PACKAGES += TelephonyProvider
+endif
+
+PRODUCT_PACKAGES += $(RELEASE_PACKAGE_VIRTUAL_CAMERA)
+# Set virtual_camera_service_enabled soong config variable based on the
+# RELEASE_PACKAGE_VIRTUAL_CAMERA build. virtual_camera_service_enabled soong config
+# variable is used to prevent accessing the service when it's not present in the build.
+$(call soong_config_set,vdm,virtual_camera_service_enabled,$(if $(RELEASE_PACKAGE_VIRTUAL_CAMERA),true,false))
 
 PRODUCT_SYSTEM_SERVER_APPS += \
     FusedLocation \
@@ -79,8 +94,7 @@ PRODUCT_SYSTEM_SERVER_APPS += \
     KeyChain \
     Telecom \
 
-PRODUCT_COPY_FILES += \
-    frameworks/av/media/libeffects/data/audio_effects.conf:system/etc/audio_effects.conf
+PRODUCT_PACKAGES += framework-audio_effects.xml
 
 PRODUCT_VENDOR_PROPERTIES += \
     ro.carrier?=unknown \

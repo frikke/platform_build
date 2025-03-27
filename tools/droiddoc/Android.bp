@@ -12,6 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    // See: http://go/android-license-faq
+    default_applicable_licenses: [
+        "Android-Apache-2.0",
+        "build_make_tools_droiddoc_license",
+    ],
+}
+
+license {
+    name: "build_make_tools_droiddoc_license",
+    package_name: "Android Droiddoc Templates",
+    license_kinds: [
+        "SPDX-license-identifier-BSD",
+        "SPDX-license-identifier-CC-BY-2.5",
+        "SPDX-license-identifier-GPL-3.0",
+        "SPDX-license-identifier-MIT",
+    ],
+    license_text: ["LICENSE"],
+}
+
 droiddoc_exported_dir {
     name: "droiddoc-templates-pdk",
     path: "templates-pdk",

@@ -17,6 +17,7 @@
 import copy
 import os
 import os.path
+import tempfile
 import zipfile
 
 import common
@@ -24,19 +25,21 @@ import ota_metadata_pb2
 import test_utils
 from ota_utils import (
     BuildLegacyOtaMetadata, CalculateRuntimeDevicesAndFingerprints,
-    FinalizeMetadata, GetPackageMetadata, PropertyFiles)
+    ConstructOtaApexInfo, FinalizeMetadata, GetPackageMetadata, PropertyFiles, AbOtaPropertyFiles, PayloadGenerator, StreamingPropertyFiles)
 from ota_from_target_files import (
-    _LoadOemDicts, AbOtaPropertyFiles,
+    _LoadOemDicts,
     GetTargetFilesZipForCustomImagesUpdates,
     GetTargetFilesZipForPartialUpdates,
     GetTargetFilesZipForSecondaryImages,
     GetTargetFilesZipWithoutPostinstallConfig,
-    Payload, PayloadSigner, POSTINSTALL_CONFIG,
-    StreamingPropertyFiles, AB_PARTITIONS)
+    POSTINSTALL_CONFIG, AB_PARTITIONS)
+from apex_utils import GetApexInfoFromTargetFiles
 from test_utils import PropertyFilesTestCase
+from common import OPTIONS
+from payload_signer import PayloadSigner
 
 
-def construct_target_files(secondary=False):
+def construct_target_files(secondary=False, compressedApex=False):
   """Returns a target-files.zip file for generating OTA packages."""
   target_files = common.MakeTempFile(prefix='target_files-', suffix='.zip')
   with zipfile.ZipFile(target_files, 'w', allowZip64=True) as target_files_zip:
@@ -77,6 +80,11 @@ def construct_target_files(secondary=False):
     if secondary:
       target_files_zip.writestr('IMAGES/system_other.img',
                                 os.urandom(len("system_other")))
+
+    if compressedApex:
+      apex_file_name = 'com.android.apex.compressed.v1.capex'
+      apex_file = os.path.join(test_utils.get_current_dir(), apex_file_name)
+      target_files_zip.write(apex_file, 'SYSTEM/apex/' + apex_file_name)
 
   return target_files
 
@@ -154,6 +162,20 @@ class OtaFromTargetFilesTest(test_utils.ReleaseToolsTestCase):
       'property2': 4096,
       'oem_fingerprint_properties': 'ro.product.device ro.product.brand',
   }
+
+  TEST_TARGET_VENDOR_INFO_DICT = common.PartitionBuildProps.FromDictionary(
+    'vendor', {
+      'ro.vendor.build.date.utc' : '87654321',
+      'ro.product.vendor.device':'vendor-device',
+      'ro.vendor.build.fingerprint': 'build-fingerprint-vendor'}
+  )
+
+  TEST_SOURCE_VENDOR_INFO_DICT = common.PartitionBuildProps.FromDictionary(
+    'vendor', {
+      'ro.vendor.build.date.utc' : '12345678',
+      'ro.product.vendor.device':'vendor-device',
+      'ro.vendor.build.fingerprint': 'build-fingerprint-vendor'}
+  )
 
   def setUp(self):
     self.testdata_dir = test_utils.get_testdata_dir()
@@ -274,6 +296,50 @@ class OtaFromTargetFilesTest(test_utils.ReleaseToolsTestCase):
         },
         metadata)
 
+  @test_utils.SkipIfExternalToolsUnavailable()
+  def test_GetApexInfoFromTargetFiles(self):
+    target_files = construct_target_files(compressedApex=True)
+    apex_infos = GetApexInfoFromTargetFiles(target_files)
+    self.assertEqual(len(apex_infos), 1)
+    self.assertEqual(apex_infos[0].package_name, "com.android.apex.compressed")
+    self.assertEqual(apex_infos[0].version, 1)
+    self.assertEqual(apex_infos[0].is_compressed, True)
+    # Compare the decompressed APEX size with the original uncompressed APEX
+    original_apex_name = 'com.android.apex.compressed.v1_original.apex'
+    original_apex_filepath = os.path.join(
+        test_utils.get_current_dir(), original_apex_name)
+    uncompressed_apex_size = os.path.getsize(original_apex_filepath)
+    self.assertEqual(apex_infos[0].decompressed_size, uncompressed_apex_size)
+
+  @staticmethod
+  def construct_tf_with_apex_info(infos):
+    apex_metadata_proto = ota_metadata_pb2.ApexMetadata()
+    apex_metadata_proto.apex_info.extend(infos)
+
+    output = common.MakeTempFile(suffix='.zip')
+    with zipfile.ZipFile(output, 'w') as zfp:
+      common.ZipWriteStr(zfp, "META/apex_info.pb",
+                         apex_metadata_proto.SerializeToString())
+    return output
+
+  def test_ConstructOtaApexInfo_incremental_package(self):
+    infos = [ota_metadata_pb2.ApexInfo(package_name='com.android.apex.1',
+                                       version=1000, is_compressed=False),
+             ota_metadata_pb2.ApexInfo(package_name='com.android.apex.2',
+                                       version=2000, is_compressed=True)]
+    target_file = self.construct_tf_with_apex_info(infos)
+
+    with zipfile.ZipFile(target_file) as target_zip:
+      info_bytes = ConstructOtaApexInfo(target_zip, source_file=target_file)
+    apex_metadata_proto = ota_metadata_pb2.ApexMetadata()
+    apex_metadata_proto.ParseFromString(info_bytes)
+
+    info_list = apex_metadata_proto.apex_info
+    self.assertEqual(2, len(info_list))
+    self.assertEqual('com.android.apex.1', info_list[0].package_name)
+    self.assertEqual(1000, info_list[0].version)
+    self.assertEqual(1000, info_list[0].source_version)
+
   def test_GetPackageMetadata_retrofitDynamicPartitions(self):
     target_info = common.BuildInfo(self.TEST_TARGET_INFO_DICT, None)
     common.OPTIONS.retrofit_dynamic_partitions = True
@@ -299,10 +365,35 @@ class OtaFromTargetFilesTest(test_utils.ReleaseToolsTestCase):
          source_info['build.prop'].build_props['ro.build.date.utc'],
          target_info['build.prop'].build_props['ro.build.date.utc'])
 
+  @staticmethod
+  def _test_GetPackageMetadata_swapVendorBuildTimestamps(target_info, source_info):
+    (target_info['vendor.build.prop'].build_props['ro.vendor.build.date.utc'],
+     source_info['vendor.build.prop'].build_props['ro.vendor.build.date.utc']) = (
+         source_info['vendor.build.prop'].build_props['ro.vendor.build.date.utc'],
+         target_info['vendor.build.prop'].build_props['ro.vendor.build.date.utc'])
+
   def test_GetPackageMetadata_unintentionalDowngradeDetected(self):
     target_info_dict = copy.deepcopy(self.TEST_TARGET_INFO_DICT)
     source_info_dict = copy.deepcopy(self.TEST_SOURCE_INFO_DICT)
     self._test_GetPackageMetadata_swapBuildTimestamps(
+        target_info_dict, source_info_dict)
+
+    target_info = common.BuildInfo(target_info_dict, None)
+    source_info = common.BuildInfo(source_info_dict, None)
+    common.OPTIONS.incremental_source = ''
+    self.assertRaises(RuntimeError, self.GetLegacyOtaMetadata, target_info,
+                      source_info)
+
+  def test_GetPackageMetadata_unintentionalVendorDowngradeDetected(self):
+    target_info_dict = copy.deepcopy(self.TEST_TARGET_INFO_DICT)
+    target_info_dict['ab_update'] = 'true'
+    target_info_dict['ab_partitions'] = ['vendor']
+    target_info_dict["vendor.build.prop"] = copy.deepcopy(self.TEST_TARGET_VENDOR_INFO_DICT)
+    source_info_dict = copy.deepcopy(self.TEST_SOURCE_INFO_DICT)
+    source_info_dict['ab_update'] = 'true'
+    source_info_dict['ab_partitions'] = ['vendor']
+    source_info_dict["vendor.build.prop"] = copy.deepcopy(self.TEST_SOURCE_VENDOR_INFO_DICT)
+    self._test_GetPackageMetadata_swapVendorBuildTimestamps(
         target_info_dict, source_info_dict)
 
     target_info = common.BuildInfo(target_info_dict, None)
@@ -322,7 +413,10 @@ class OtaFromTargetFilesTest(test_utils.ReleaseToolsTestCase):
     common.OPTIONS.incremental_source = ''
     common.OPTIONS.downgrade = True
     common.OPTIONS.wipe_user_data = True
+    common.OPTIONS.spl_downgrade = True
     metadata = self.GetLegacyOtaMetadata(target_info, source_info)
+    # Reset spl_downgrade so other tests are unaffected
+    common.OPTIONS.spl_downgrade = False
 
     self.assertDictEqual(
         {
@@ -338,8 +432,58 @@ class OtaFromTargetFilesTest(test_utils.ReleaseToolsTestCase):
             'pre-device': 'product-device',
             'pre-build': 'build-fingerprint-source',
             'pre-build-incremental': 'build-version-incremental-source',
+            'spl-downgrade': 'yes',
         },
         metadata)
+
+  def test_GetPackageMetadata_vendorDowngrade(self):
+    target_info_dict = copy.deepcopy(self.TEST_TARGET_INFO_DICT)
+    target_info_dict['ab_update'] = 'true'
+    target_info_dict['ab_partitions'] = ['vendor']
+    target_info_dict["vendor.build.prop"] = copy.deepcopy(self.TEST_TARGET_VENDOR_INFO_DICT)
+    source_info_dict = copy.deepcopy(self.TEST_SOURCE_INFO_DICT)
+    source_info_dict['ab_update'] = 'true'
+    source_info_dict['ab_partitions'] = ['vendor']
+    source_info_dict["vendor.build.prop"] = copy.deepcopy(self.TEST_SOURCE_VENDOR_INFO_DICT)
+    self._test_GetPackageMetadata_swapVendorBuildTimestamps(
+        target_info_dict, source_info_dict)
+
+    target_info = common.BuildInfo(target_info_dict, None)
+    source_info = common.BuildInfo(source_info_dict, None)
+    common.OPTIONS.incremental_source = ''
+    common.OPTIONS.downgrade = True
+    common.OPTIONS.wipe_user_data = True
+    common.OPTIONS.spl_downgrade = True
+    metadata = self.GetLegacyOtaMetadata(target_info, source_info)
+    # Reset spl_downgrade so other tests are unaffected
+    common.OPTIONS.spl_downgrade = False
+
+    self.assertDictEqual(
+        {
+            'ota-downgrade': 'yes',
+            'ota-type': 'AB',
+            'ota-required-cache': '0',
+            'ota-wipe': 'yes',
+            'post-build': 'build-fingerprint-target',
+            'post-build-incremental': 'build-version-incremental-target',
+            'post-sdk-level': '27',
+            'post-security-patch-level': '2017-12-01',
+            'post-timestamp': '1500000000',
+            'pre-device': 'product-device',
+            'pre-build': 'build-fingerprint-source',
+            'pre-build-incremental': 'build-version-incremental-source',
+            'spl-downgrade': 'yes',
+        },
+        metadata)
+
+    post_build = GetPackageMetadata(target_info, source_info).postcondition
+    self.assertEqual('vendor', post_build.partition_state[0].partition_name)
+    self.assertEqual('12345678', post_build.partition_state[0].version)
+
+    pre_build = GetPackageMetadata(target_info, source_info).precondition
+    self.assertEqual('vendor', pre_build.partition_state[0].partition_name)
+    self.assertEqual('87654321', pre_build.partition_state[0].version)
+
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_GetTargetFilesZipForSecondaryImages(self):
@@ -809,6 +953,7 @@ class StreamingPropertyFilesTest(PropertyFilesTestCase):
         property_files.required)
     self.assertEqual(
         (
+            'apex_info.pb',
             'care_map.pb',
             'care_map.txt',
             'compatibility.zip',
@@ -908,6 +1053,7 @@ class AbOtaPropertyFilesTest(PropertyFilesTestCase):
         property_files.required)
     self.assertEqual(
         (
+            'apex_info.pb',
             'care_map.pb',
             'care_map.txt',
             'compatibility.zip',
@@ -917,7 +1063,7 @@ class AbOtaPropertyFilesTest(PropertyFilesTestCase):
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_GetPayloadMetadataOffsetAndSize(self):
     target_file = construct_target_files()
-    payload = Payload()
+    payload = PayloadGenerator()
     payload.Generate(target_file)
 
     payload_signer = PayloadSigner()
@@ -972,7 +1118,7 @@ class AbOtaPropertyFilesTest(PropertyFilesTestCase):
         0, proc.returncode,
         'Failed to run brillo_update_payload:\n{}'.format(stdoutdata))
 
-    signed_metadata_sig_file = payload_signer.Sign(metadata_sig_file)
+    signed_metadata_sig_file = payload_signer.SignHashFile(metadata_sig_file)
 
     # Finally we can compare the two signatures.
     with open(signed_metadata_sig_file, 'rb') as verify_fp:
@@ -982,7 +1128,7 @@ class AbOtaPropertyFilesTest(PropertyFilesTestCase):
   def construct_zip_package_withValidPayload(with_metadata=False):
     # Cannot use construct_zip_package() since we need a "valid" payload.bin.
     target_file = construct_target_files()
-    payload = Payload()
+    payload = PayloadGenerator()
     payload.Generate(target_file)
 
     payload_signer = PayloadSigner()
@@ -1086,10 +1232,10 @@ class PayloadSignerTest(test_utils.ReleaseToolsTestCase):
     self.assertEqual('openssl', payload_signer.signer)
 
   def test_init_withExternalSigner(self):
-    common.OPTIONS.payload_signer = 'abc'
     common.OPTIONS.payload_signer_args = ['arg1', 'arg2']
     common.OPTIONS.payload_signer_maximum_signature_size = '512'
-    payload_signer = PayloadSigner()
+    payload_signer = PayloadSigner(
+        OPTIONS.package_key, OPTIONS.private_key_suffix, payload_signer='abc')
     self.assertEqual('abc', payload_signer.signer)
     self.assertEqual(['arg1', 'arg2'], payload_signer.signer_args)
     self.assertEqual(512, payload_signer.maximum_signature_size)
@@ -1112,35 +1258,36 @@ class PayloadSignerTest(test_utils.ReleaseToolsTestCase):
   def test_Sign(self):
     payload_signer = PayloadSigner()
     input_file = os.path.join(self.testdata_dir, self.SIGFILE)
-    signed_file = payload_signer.Sign(input_file)
+    signed_file = payload_signer.SignHashFile(input_file)
 
     verify_file = os.path.join(self.testdata_dir, self.SIGNED_SIGFILE)
     self._assertFilesEqual(verify_file, signed_file)
 
   def test_Sign_withExternalSigner_openssl(self):
     """Uses openssl as the external payload signer."""
-    common.OPTIONS.payload_signer = 'openssl'
     common.OPTIONS.payload_signer_args = [
         'pkeyutl', '-sign', '-keyform', 'DER', '-inkey',
         os.path.join(self.testdata_dir, 'testkey.pk8'),
         '-pkeyopt', 'digest:sha256']
-    payload_signer = PayloadSigner()
+    payload_signer = PayloadSigner(
+        OPTIONS.package_key, OPTIONS.private_key_suffix, payload_signer="openssl")
     input_file = os.path.join(self.testdata_dir, self.SIGFILE)
-    signed_file = payload_signer.Sign(input_file)
+    signed_file = payload_signer.SignHashFile(input_file)
 
     verify_file = os.path.join(self.testdata_dir, self.SIGNED_SIGFILE)
     self._assertFilesEqual(verify_file, signed_file)
 
   def test_Sign_withExternalSigner_script(self):
     """Uses testdata/payload_signer.sh as the external payload signer."""
-    common.OPTIONS.payload_signer = os.path.join(
+    external_signer = os.path.join(
         self.testdata_dir, 'payload_signer.sh')
-    os.chmod(common.OPTIONS.payload_signer, 0o700)
+    os.chmod(external_signer, 0o700)
     common.OPTIONS.payload_signer_args = [
         os.path.join(self.testdata_dir, 'testkey.pk8')]
-    payload_signer = PayloadSigner()
+    payload_signer = PayloadSigner(
+        OPTIONS.package_key, OPTIONS.private_key_suffix, payload_signer=external_signer)
     input_file = os.path.join(self.testdata_dir, self.SIGFILE)
-    signed_file = payload_signer.Sign(input_file)
+    signed_file = payload_signer.SignHashFile(input_file)
 
     verify_file = os.path.join(self.testdata_dir, self.SIGNED_SIGFILE)
     self._assertFilesEqual(verify_file, signed_file)
@@ -1163,7 +1310,7 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
   @staticmethod
   def _create_payload_full(secondary=False):
     target_file = construct_target_files(secondary)
-    payload = Payload(secondary)
+    payload = PayloadGenerator(secondary, OPTIONS.wipe_user_data)
     payload.Generate(target_file)
     return payload
 
@@ -1171,7 +1318,7 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
   def _create_payload_incremental():
     target_file = construct_target_files()
     source_file = construct_target_files()
-    payload = Payload()
+    payload = PayloadGenerator()
     payload.Generate(target_file, source_file)
     return payload
 
@@ -1189,7 +1336,7 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
   def test_Generate_additionalArgs(self):
     target_file = construct_target_files()
     source_file = construct_target_files()
-    payload = Payload()
+    payload = PayloadGenerator()
     # This should work the same as calling payload.Generate(target_file,
     # source_file).
     payload.Generate(
@@ -1200,7 +1347,7 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
   def test_Generate_invalidInput(self):
     target_file = construct_target_files()
     common.ZipDelete(target_file, 'IMAGES/vendor.img')
-    payload = Payload()
+    payload = PayloadGenerator()
     self.assertRaises(common.ExternalError, payload.Generate, target_file)
 
   @test_utils.SkipIfExternalToolsUnavailable()
@@ -1236,6 +1383,9 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
     common.OPTIONS.wipe_user_data = True
     payload = self._create_payload_full()
     payload.Sign(PayloadSigner())
+    with tempfile.NamedTemporaryFile() as fp:
+      with zipfile.ZipFile(fp, "w") as zfp:
+        payload.WriteToZip(zfp)
 
     with open(payload.payload_properties) as properties_fp:
       self.assertIn("POWERWASH=1", properties_fp.read())
@@ -1244,6 +1394,9 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
   def test_Sign_secondary(self):
     payload = self._create_payload_full(secondary=True)
     payload.Sign(PayloadSigner())
+    with tempfile.NamedTemporaryFile() as fp:
+      with zipfile.ZipFile(fp, "w") as zfp:
+        payload.WriteToZip(zfp)
 
     with open(payload.payload_properties) as properties_fp:
       self.assertIn("SWITCH_SLOT_ON_REBOOT=0", properties_fp.read())
@@ -1268,31 +1421,15 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
     with zipfile.ZipFile(output_file) as verify_zip:
       # First make sure we have the essential entries.
       namelist = verify_zip.namelist()
-      self.assertIn(Payload.PAYLOAD_BIN, namelist)
-      self.assertIn(Payload.PAYLOAD_PROPERTIES_TXT, namelist)
+      self.assertIn(PayloadGenerator.PAYLOAD_BIN, namelist)
+      self.assertIn(PayloadGenerator.PAYLOAD_PROPERTIES_TXT, namelist)
 
       # Then assert these entries are stored.
       for entry_info in verify_zip.infolist():
-        if entry_info.filename not in (Payload.PAYLOAD_BIN,
-                                       Payload.PAYLOAD_PROPERTIES_TXT):
+        if entry_info.filename not in (PayloadGenerator.PAYLOAD_BIN,
+                                       PayloadGenerator.PAYLOAD_PROPERTIES_TXT):
           continue
         self.assertEqual(zipfile.ZIP_STORED, entry_info.compress_type)
-
-  @test_utils.SkipIfExternalToolsUnavailable()
-  def test_WriteToZip_unsignedPayload(self):
-    """Unsigned payloads should not be allowed to be written to zip."""
-    payload = self._create_payload_full()
-
-    output_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(output_file, 'w', allowZip64=True) as output_zip:
-      self.assertRaises(AssertionError, payload.WriteToZip, output_zip)
-
-    # Also test with incremental payload.
-    payload = self._create_payload_incremental()
-
-    output_file = common.MakeTempFile(suffix='.zip')
-    with zipfile.ZipFile(output_file, 'w', allowZip64=True) as output_zip:
-      self.assertRaises(AssertionError, payload.WriteToZip, output_zip)
 
   @test_utils.SkipIfExternalToolsUnavailable()
   def test_WriteToZip_secondary(self):
@@ -1306,14 +1443,14 @@ class PayloadTest(test_utils.ReleaseToolsTestCase):
     with zipfile.ZipFile(output_file) as verify_zip:
       # First make sure we have the essential entries.
       namelist = verify_zip.namelist()
-      self.assertIn(Payload.SECONDARY_PAYLOAD_BIN, namelist)
-      self.assertIn(Payload.SECONDARY_PAYLOAD_PROPERTIES_TXT, namelist)
+      self.assertIn(PayloadGenerator.SECONDARY_PAYLOAD_BIN, namelist)
+      self.assertIn(PayloadGenerator.SECONDARY_PAYLOAD_PROPERTIES_TXT, namelist)
 
       # Then assert these entries are stored.
       for entry_info in verify_zip.infolist():
         if entry_info.filename not in (
-                Payload.SECONDARY_PAYLOAD_BIN,
-                Payload.SECONDARY_PAYLOAD_PROPERTIES_TXT):
+                PayloadGenerator.SECONDARY_PAYLOAD_BIN,
+                PayloadGenerator.SECONDARY_PAYLOAD_PROPERTIES_TXT):
           continue
         self.assertEqual(zipfile.ZIP_STORED, entry_info.compress_type)
 

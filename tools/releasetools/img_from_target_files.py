@@ -35,6 +35,10 @@ Flags:
       `filespec` arg in zip2zip's help message). The option can be repeated to
       include multiple entries.
 
+  --exclude <filespec>
+      Don't include these files. If the file is in --additional and --exclude,
+      the file will not be included.
+
 """
 
 from __future__ import print_function
@@ -56,6 +60,7 @@ logger = logging.getLogger(__name__)
 OPTIONS = common.OPTIONS
 
 OPTIONS.additional_entries = []
+OPTIONS.excluded_entries = []
 OPTIONS.bootable_only = False
 OPTIONS.put_super = None
 OPTIONS.put_bootloader = None
@@ -64,6 +69,8 @@ OPTIONS.super_device_list = None
 OPTIONS.retrofit_dap = None
 OPTIONS.build_super = None
 OPTIONS.sparse_userimages = None
+OPTIONS.use_fastboot_info = True
+OPTIONS.build_super_image = None
 
 
 def LoadOptions(input_file):
@@ -104,6 +111,13 @@ def CopyZipEntries(input_file, output_file, entries):
   common.RunAndCheckOutput(cmd)
 
 
+def LocatePartitionEntry(partition_name, namelist):
+  for subdir in ["IMAGES", "PREBUILT_IMAGES", "RADIO"]:
+    entry_name = os.path.join(subdir, partition_name + ".img")
+    if entry_name in namelist:
+      return entry_name
+
+
 def EntriesForUserImages(input_file):
   """Returns the user images entries to be copied.
 
@@ -119,12 +133,23 @@ def EntriesForUserImages(input_file):
   entries = [
       'OTA/android-info.txt:android-info.txt',
   ]
+  if OPTIONS.use_fastboot_info:
+    entries.append('META/fastboot-info.txt:fastboot-info.txt')
+  ab_partitions = []
   with zipfile.ZipFile(input_file) as input_zip:
     namelist = input_zip.namelist()
+    if "META/ab_partitions.txt" in namelist:
+      ab_partitions = input_zip.read(
+          "META/ab_partitions.txt").decode().strip().split()
+  if 'PREBUILT_IMAGES/kernel_16k' in namelist:
+    entries.append('PREBUILT_IMAGES/kernel_16k:kernel_16k')
+  if 'PREBUILT_IMAGES/ramdisk_16k.img' in namelist:
+    entries.append('PREBUILT_IMAGES/ramdisk_16k.img:ramdisk_16k.img')
 
+  visited_partitions = set(OPTIONS.dynamic_partition_list)
   for image_path in [name for name in namelist if name.startswith('IMAGES/')]:
     image = os.path.basename(image_path)
-    if OPTIONS.bootable_only and image not in('boot.img', 'recovery.img', 'bootloader'):
+    if OPTIONS.bootable_only and image not in ('boot.img', 'recovery.img', 'bootloader', 'init_boot.img'):
       continue
     if not image.endswith('.img') and image != 'bootloader':
       continue
@@ -136,7 +161,14 @@ def EntriesForUserImages(input_file):
         continue
       if image in dynamic_images:
         continue
+    partition_name = image.rstrip(".img")
+    visited_partitions.add(partition_name)
     entries.append('{}:{}'.format(image_path, image))
+  for part in [part for part in ab_partitions if part not in visited_partitions]:
+    entry = LocatePartitionEntry(part, namelist)
+    image = os.path.basename(entry)
+    if entry is not None:
+      entries.append('{}:{}'.format(entry, image))
   return entries
 
 
@@ -168,12 +200,18 @@ def RebuildAndWriteSuperImages(input_file, output_file):
   input_tmp = common.UnzipTemp(input_file)
 
   super_file = common.MakeTempFile('super_', '.img')
-  BuildSuperImage(input_tmp, super_file)
+
+  # Allow overriding the BUILD_SUPER_IMAGE binary
+  if OPTIONS.build_super_image:
+    command = [OPTIONS.build_super_image, input_tmp, super_file]
+    common.RunAndCheckOutput(command)
+  else:
+    BuildSuperImage(input_tmp, super_file)
 
   logger.info('Writing super.img to archive...')
   with zipfile.ZipFile(
-      output_file, 'a', compression=zipfile.ZIP_DEFLATED,
-      allowZip64=not OPTIONS.sparse_userimages) as output_zip:
+          output_file, 'a', compression=zipfile.ZIP_DEFLATED,
+          allowZip64=True) as output_zip:
     common.ZipWrite(output_zip, super_file, 'super.img')
 
 
@@ -187,6 +225,9 @@ def ImgFromTargetFiles(input_file, output_file):
   Raises:
     ValueError: On invalid input.
   """
+  if not os.path.exists(input_file):
+    raise ValueError('%s is not exist' % input_file)
+
   if not zipfile.is_zipfile(input_file):
     raise ValueError('%s is not a valid zipfile' % input_file)
 
@@ -209,6 +250,9 @@ def ImgFromTargetFiles(input_file, output_file):
   # Any additional entries provided by caller.
   entries += OPTIONS.additional_entries
 
+  # Remove any excluded entries
+  entries = [e for e in entries if e not in OPTIONS.excluded_entries]
+
   CopyZipEntries(input_file, output_file, entries)
 
   if rebuild_super:
@@ -222,6 +266,10 @@ def main(argv):
       OPTIONS.bootable_only = True
     elif o == '--additional':
       OPTIONS.additional_entries.append(a)
+    elif o == '--exclude':
+      OPTIONS.excluded_entries.append(a)
+    elif o == '--build_super_image':
+      OPTIONS.build_super_image = a
     else:
       return False
     return True
@@ -230,7 +278,9 @@ def main(argv):
                              extra_opts='z',
                              extra_long_opts=[
                                  'additional=',
+                                 'exclude=',
                                  'bootable_zip',
+                                 'build_super_image=',
                              ],
                              extra_option_handler=option_handler)
   if len(args) != 2:
@@ -248,8 +298,5 @@ if __name__ == '__main__':
   try:
     common.CloseInheritedPipes()
     main(sys.argv[1:])
-  except common.ExternalError as e:
-    logger.exception('\n   ERROR:\n')
-    sys.exit(1)
   finally:
     common.Cleanup()

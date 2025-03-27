@@ -16,6 +16,10 @@
 
 // the signapk tool (a .jar application used to sign packages)
 // ============================================================
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 java_binary_host {
     name: "signapk",
     srcs: ["src/**/*.java"],
@@ -26,6 +30,10 @@ java_binary_host {
         "bouncycastle-bcpkix-unbundled",
         "conscrypt-unbundled",
     ],
+
+    // b/267608166: Prevent target Java 17 so the host-side tool can run in an
+    // environment where JDK 11 is available.
+    java_version: "11",
 
     jni_libs: ["libconscrypt_openjdk_jni"],
 
